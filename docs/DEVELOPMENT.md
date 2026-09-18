@@ -1,792 +1,1180 @@
 # Seqvex Development Guide
 
-> **Status:** Early-stage development guide / living document
+> **This document is the development contract for Seqvex.**
+>
+> It applies to both human contributors and AI-assisted development.
+> Before changing code, read this document together with the relevant
+> architecture and failure/recovery documentation.
+
+------------------------------------------------------------------------
 
 ## 1. Purpose
 
-This document describes how Seqvex should be developed.
+`DEVELOPMENT.md` defines how Seqvex is developed, not merely how Rust
+code is formatted.
 
-Seqvex is intentionally built incrementally. The objective is not to design the complete framework first, but to gain implementation experience, test real behavior, measure actual constraints, and allow durable abstractions to emerge from those observations.
+It translates the project's architectural direction into practical rules
+for:
 
-The core development loop is:
+- humans;
+- coding agents;
+- architecture changes;
+- implementation;
+- testing;
+- benchmarking;
+- profiling;
+- documentation;
+- integration.
 
-```text
-Understand
-    ↓
-Define expected behavior
-    ↓
-Write test cases
-    ↓
-Implement the smallest useful experiment
-    ↓
+The central development principle is:
+
+> **Code should not outrun understanding.**
+
+Seqvex is an early-stage project. Architecture, APIs, crate boundaries,
+storage representations, and implementation strategies may change as
+real problems are encountered and measured.
+
+Do not freeze a design merely because it can be implemented.
+
+------------------------------------------------------------------------
+
+## 2. Development Philosophy
+
+Seqvex is developed experimentally and incrementally.
+
+The preferred loop is:
+
+``` text
+Learn
+  ↓
+Understand the problem
+  ↓
+Design the smallest experiment
+  ↓
+Implement
+  ↓
 Test
-    ↓
-Break / find edge cases
-    ↓
-Understand
-    ↓
+  ↓
+Break it deliberately
+  ↓
+Understand failure
+  ↓
 Benchmark
-    ↓
+  ↓
 Profile
-    ↓
+  ↓
 Optimize
-    ↓
+  ↓
 Document
-    ↓
+  ↓
 Integrate
+```
+
+### Core rules
+
+1. Understand the problem before abstracting it.
+2. Implement the smallest mechanism that can test the idea.
+3. Test both expected and invalid behavior.
+4. Deliberately exercise failure paths.
+5. Measure before making performance claims.
+6. Profile before optimizing.
+7. Generalize only after recurring requirements justify generalization.
+8. Document decisions and their evidence.
+9. Keep unresolved decisions explicitly unresolved.
+10. Prefer reversible decisions while the architecture is still being
+    discovered.
+
+> **Do not create an abstraction until you have experienced the problem
+> it solves.**
+
+------------------------------------------------------------------------
+
+## 3. Architectural Invariants
+
+The following principles should guide implementation even when the
+concrete Rust design remains undecided.
+
+### 3.1 Streaming-first, not batchless
+
+Seqvex is **streaming-first**, but it is not batchless.
+
+Streaming is the semantic foundation. Single-observation execution is
+the smallest execution unit. Bounded micro-batches and larger batches
+remain valid where they improve computational or hardware efficiency
+without violating:
+
+- ordering;
+- temporal semantics;
+- causality;
+- state semantics;
+- online-learning semantics.
+
+A historical dataset may be replayed as a stream. A live deployment may
+produce an effectively unbounded stream.
+
+Batching is therefore an execution strategy, not the definition of the
+computational model.
+
+### 3.2 Execution semantics and compute placement are separate
+
+Execution semantics describe **what a computation means**.
+
+Possible semantics include:
+
+- single observation;
+- streaming/online;
+- bounded micro-batch;
+- batch.
+
+Compute placement describes **where and how it executes**:
+
+- CPU;
+- GPU/accelerator;
+- heterogeneous CPU/accelerator execution.
+
+Do not allow a hardware backend to silently change the semantic meaning
+of an algorithm.
+
+### 3.3 State is first-class
+
+Many Seqvex workloads are stateful.
+
+A conceptual state transition is:
+
+``` text
+observation
     ↓
-Automate with CI
-```
-
-The guiding rule is:
-
-> **Do not create an abstraction until you have experienced the problem it solves.**
-
----
-
-## 2. What We Develop
-
-Seqvex owns the computational stages of the ML/RL pipeline rather than trying to own every function associated with data.
-
-> **Seqvex differentiates its scope by process responsibility rather than by individual function. It owns the computational stages from ML/RL preprocessing and representation through model execution, training, validation, inference, and learning. General-purpose data ingestion, manipulation, cleaning, exploratory analysis, visualization, and storage remain outside the framework.**
-
-This means that operations such as one-hot encoding, normalization, standardization, PCA, rolling statistics, or online statistics may be implemented when they serve the ML/RL pipeline.
-
-The same operation may remain outside Seqvex when it is being used as general-purpose data analysis or manipulation.
-
-The boundary is therefore based on **responsibility and role**, not a fixed list of functions.
-
----
-
-## 3. Development Progression
-
-Development should generally progress from small, understandable components toward integrated framework behavior.
-
-```text
-Rust foundations
-      ↓
-Numerical primitives
-      ↓
-Statistics
-      ↓
-Classical ML
-      ↓
-Online / streaming ML
-      ↓
-Temporal validation
-      ↓
-Performance fundamentals
-      ↓
-Execution/runtime experiments
-      ↓
-Model and state integration
-      ↓
-Hardware/device experiments
-      ↓
-Proven abstractions
-      ↓
-Framework integration
-```
-
-The sequence is a direction rather than a rigid schedule.
-
-If implementation experience reveals that a different order is required, the order should change.
-
----
-
-## 4. Start With the Smallest Useful Problem
-
-Before creating a new abstraction, answer:
-
-1. What concrete problem are we solving?
-2. What behavior should the implementation provide?
-3. What are the normal and failure cases?
-4. What invariants must remain true?
-5. Can the problem be demonstrated with a small experiment?
-
-Prefer:
-
-```text
-small problem
+current valid state
     ↓
-small implementation
+computation
     ↓
-understand behavior
+candidate next state
     ↓
-test
-```
-
-over:
-
-```text
-large requirement
-    ↓
-large abstraction
-    ↓
-many traits
-    ↓
-large implementation
-```
-
-A capability should earn additional complexity through actual requirements.
-
----
-
-## 5. Test Cases as Development Specifications
-
-Test cases are a central development tool for Seqvex.
-
-They serve three purposes:
-
-1. Define expected behavior.
-2. Provide a way to personally verify implementations.
-3. Become automated regression protection through CI.
-
-The preferred approach is to write understandable tests that the developer can explain and maintain.
-
-A basic example:
-
-```text
-Given a valid model state
-When a valid observation is processed
-Then the expected state transition occurs.
-```
-
-Failure behavior should also be tested:
-
-```text
-Given a valid model state
-When an update fails
-Then the previous valid state remains active
-And the failure is reported.
-```
-
-Tests should cover:
-
-- normal behavior;
-- edge cases;
-- invalid input;
-- state transitions;
-- failure paths;
-- numerical invariants;
-- integration behavior.
-
----
-
-## 6. TDD: Use It Where It Helps
-
-Seqvex does not require strict project-wide Test-Driven Development.
-
-Use a test-first approach when:
-
-- expected behavior is already understood;
-- the behavior can be stated clearly;
-- the test is easier to write than the implementation;
-- the test defines an important invariant or contract.
-
-A useful TDD loop is:
-
-```text
-RED
-  ↓
-write failing test
-  ↓
-GREEN
-  ↓
-smallest implementation
-  ↓
-REFACTOR
-  ↓
-run tests again
-```
-
-Do not force TDD onto exploratory work where the purpose is to discover the correct algorithm, representation, or abstraction.
-
-For exploratory low-level work, it is acceptable to:
-
-```text
-experiment
-   ↓
-understand
-   ↓
-define expected behavior
-   ↓
-write durable tests
-   ↓
-integrate
-```
-
----
-
-## 7. Unit Tests
-
-Use unit tests for small, isolated behavior.
-
-Typical examples:
-
-```text
-statistics
-numerical operations
-state transitions
-model updates
 validation
-error handling
-```
-
-A unit test should answer a specific question.
-
-Examples:
-
-```text
-Does online variance produce the expected result?
-
-Does an update preserve the model invariant?
-
-Does invalid input return the expected failure?
-
-Does a rejected update leave committed state unchanged?
-```
-
-Keep tests readable enough that their purpose is immediately apparent.
-
----
-
-## 8. Integration Tests
-
-Use integration tests when multiple components must work together.
-
-Examples:
-
-```text
-input
-  ↓
-ML/RL preprocessing
-  ↓
-model
-  ↓
-state update
-  ↓
-prediction / learning
-```
-
-Another important path is:
-
-```text
-input
-  ↓
-model
-  ↓
-failed update
-  ↓
-state preserved
-  ↓
-failure reported
-  ↓
-next observation
-```
-
-Integration tests should be introduced when separate components have become meaningful enough to exercise together.
-
-Do not build a large integration-test framework before there is a real integration to test.
-
----
-
-## 9. Property and Invariant Tests
-
-Use property or invariant testing where behavior is better expressed as a rule than as one expected output.
-
-Examples:
-
-```text
-variance >= 0
-
-compatible dimensions remain compatible
-
-valid state transitions preserve required invariants
-
-a rejected update does not modify committed state
-
-failed updates cannot expose partially committed state
-```
-
-Property-based testing may be introduced when it provides meaningful coverage of large input spaces.
-
-The testing mechanism should remain proportional to the problem.
-
----
-
-## 10. BDD and Behavioral Specifications
-
-BDD is optional.
-
-Use behavior-oriented specifications when describing externally observable behavior or system contracts.
-
-For example:
-
-```text
-Given a valid model state
-And a valid incoming observation
-When the model performs an online update
-Then the update becomes the new committed state.
-```
-
-BDD-style specifications are useful for framework-level behavior.
-
-They are not necessary for every low-level numerical operation.
-
-The practical hierarchy is:
-
-```text
-Unit tests
     ↓
-component correctness
-
-Property / invariant tests
+commit
     ↓
-mathematical and state guarantees
-
-Integration tests
-    ↓
-component interaction
-
-Behavioral specifications
-    ↓
-observable framework behavior
+valid next state
 ```
 
----
+A failed update must not silently leave the model or runtime in a
+partially modified or invalid state.
 
-## 11. DRY: Do Not Repeat Knowledge
+Detailed failure behavior is defined in:
 
-Seqvex should follow the DRY principle:
+`docs/FAILURE_AND_RECOVERY.md`
 
-> **Do not repeat knowledge that must remain consistent.**
+Core principle:
 
-However, DRY does **not** mean aggressively removing every repeated line of code.
+> **Detect → stop unsafe transition → preserve valid state → classify →
+> act → report → continue/recover/isolate/terminate.**
 
-There is an important distinction between:
+### 3.4 Heterogeneous memory and hardware locality
 
-```text
-duplicated implementation
+Do not assume all memory is equivalent.
+
+The architecture must preserve the ability to reason about:
+
+``` text
+CPU registers
+L1/L2/L3/LLC cache
+RAM
+interconnect
+GPU registers/cache
+device memory / VRAM
+NUMA
+memory locality
+alignment
+SIMD access
+memory bandwidth
+data movement
+synchronization
 ```
 
-and:
+Potential future mechanisms include:
 
-```text
-duplicated knowledge
+- device-local storage;
+- pinned memory;
+- unified/shared memory;
+- zero-copy paths;
+- NUMA-aware allocation;
+- explicit transfers.
+
+These are optimization possibilities, not current API commitments.
+
+> **Keep model state and frequently used data resident on one device
+> when possible. Move data only when measured computational benefit
+> exceeds transfer and synchronization cost.**
+
+Do not equate heterogeneous execution with constant CPU↔GPU movement.
+
+### 3.5 `std`, `no_std`, and constrained deployment
+
+Seqvex is **std-first**.
+
+The whole framework should not currently be forced into `#![no_std]`.
+However, foundational components should avoid unnecessary dependence on
+operating-system facilities where practical so that constrained or
+embedded deployment remains possible.
+
+Conceptually:
+
+``` text
+Seqvex
+│
+├── foundational components
+│      └── potentially no_std-compatible
+├── numerical / ML components
+│      └── compatibility depends on requirements
+├── runtime
+│      └── may depend on platform facilities
+└── integrations / tooling
+       └── may depend on std / OS services
 ```
 
-Two pieces of code may look similar today without actually sharing the same abstraction.
+Bare-metal, embedded, low-power, and constrained deployment are future
+architectural directions.
 
-Prefer:
+The project does **not** currently claim:
 
-```text
-first implementation
-    ↓
-second implementation exposes real repetition
-    ↓
-confirm same responsibility / invariant
-    ↓
-extract shared abstraction
+- universal `no_std` support;
+- bare-metal support;
+- hard real-time guarantees;
+- safety certification;
+- zero-allocation execution;
+- cross-platform deterministic floating-point behavior.
+
+These properties must be demonstrated before being claimed.
+
+------------------------------------------------------------------------
+
+## 4. Scope Boundary
+
+Seqvex differentiates its scope by **process responsibility**, not by
+the name of an individual function.
+
+Seqvex owns the computational stages from:
+
+- ML/RL preprocessing and representation;
+- model execution;
+- training;
+- validation;
+- inference;
+- learning;
+- numerical computation required by ML/RL;
+- execution/runtime mechanisms.
+
+General-purpose:
+
+- data ingestion;
+- data manipulation;
+- data cleaning;
+- exploratory data analysis;
+- visualization;
+- databases;
+- storage;
+- ETL;
+- domain/business logic
+
+remain outside the framework.
+
+Therefore an operation is not classified solely by its name.
+
+For example, one-hot encoding, normalization/standardization, PCA,
+rolling statistics, and online statistics may be inside or outside
+Seqvex depending on whether they are being implemented as part of
+Seqvex's ML/RL computational responsibility.
+
+The boundary is determined by **role and responsibility**.
+
+Seqvex should not become a general-purpose dataframe, ETL, EDA, or
+data-engineering framework.
+
+------------------------------------------------------------------------
+
+## 5. Build From First Principles
+
+Seqvex should be understandable from its foundations.
+
+Existing libraries may be used when they provide clear value, but
+dependencies should not determine the architecture unnecessarily.
+
+Before adopting a dependency, consider:
+
+- what problem it solves;
+- whether the problem is fundamental or incidental;
+- ownership and licensing;
+- compile-time impact;
+- runtime overhead;
+- allocation behavior;
+- portability;
+- `std`/`no_std` implications;
+- hardware/backend constraints;
+- whether the dependency introduces an abstraction Seqvex would
+    otherwise need to understand itself.
+
+Do not reject dependencies merely because they are external.
+
+Do not add dependencies merely because they are convenient.
+
+The objective is **deliberate dependency selection**.
+
+------------------------------------------------------------------------
+
+## 6. Modularity
+
+Seqvex should be modular at meaningful responsibility boundaries.
+
+A functional module may contain focused sub-functional components:
+
+``` text
+functional-module/
+├── README.md
+├── sub-function/
+├── sub-function/
+└── tests/
 ```
 
-Avoid:
+### Documentation rule
 
-```text
-similar-looking code
-    ↓
-immediate generic abstraction
-    ↓
-premature trait / helper / framework
-```
+`README.md` belongs at the **functional-module level**, where shared
+context is useful.
 
-The project rule remains:
+Do not create a README for every tiny function or sub-function.
 
-> **Do not abstract similarity until the underlying reason for the similarity is understood.**
+Detailed implementation knowledge should remain close to:
 
-This is particularly important for traits, generic numerical abstractions, device interfaces, and runtime APIs.
+- source code;
+- tests;
+- Rust documentation/comments;
+- relevant architectural documentation.
 
----
+> **Document at the highest level where shared context is useful; keep
+> detailed implementation knowledge close to the code and tests.**
 
-## 12. When to Create a Trait
+A folder should represent a coherent responsibility, not simply a single
+function, struct, or method.
 
-Create a trait when there is a real shared contract.
+------------------------------------------------------------------------
 
-Good reasons include:
+## 7. Crate and Workspace Boundaries
 
-- multiple implementations must satisfy the same behavior;
-- a backend boundary requires a stable interface;
-- generic algorithms genuinely operate over different implementations;
-- a capability must be substituted or tested independently.
+Seqvex is a Cargo workspace, but a crate should not be created merely
+because a future architecture diagram contains a possible component.
 
-Do not create a trait merely because two structs currently contain similar methods.
-
-Ask:
-
-```text
-Do these implementations share a stable responsibility?
-        │
-   ┌────┴────┐
-   │         │
-  yes        no
-   │         │
-   ▼         ▼
-consider   keep local
-trait      implementation
-```
-
----
-
-## 13. When to Create a Crate
-
-Seqvex uses a Cargo workspace, but exact crate boundaries are deliberately not frozen.
-
-Create a crate when a meaningful architectural boundary has emerged.
-
-Useful reasons include:
+A new crate is justified when a meaningful boundary emerges through
+actual requirements, such as:
 
 - dependency isolation;
 - independent testing;
 - backend separation;
 - API clarity;
 - reuse;
+- compile-time isolation;
 - reduced coupling;
-- optional functionality;
-- compilation behavior.
+- materially different platform requirements.
 
-Do not create a new crate simply because a folder has become large.
+Possible future areas include:
 
-The question is:
+- core types and errors;
+- numerical computation;
+- streaming/online learning;
+- sequential models;
+- supervised learning;
+- unsupervised learning;
+- reinforcement learning;
+- validation;
+- execution/runtime;
+- device backends.
 
-> **Does this represent a real dependency or responsibility boundary?**
+These are architectural directions, not a frozen crate list.
 
----
+> **Crate boundaries should emerge from demonstrated responsibility
+> boundaries.**
 
-## 14. When to Create an Abstraction
+------------------------------------------------------------------------
 
-Before creating a permanent abstraction:
+## 8. Rust Engineering Principles
 
-```text
-1. Identify the concrete problem.
-2. Implement enough real behavior to experience it.
-3. Observe what is actually common.
-4. Measure important consequences.
-5. Determine whether the problem will recur.
-6. Consider the reversal cost.
-7. Create the smallest abstraction that solves the demonstrated problem.
+These principles are important design tools. They are **not patterns to
+apply mechanically**.
+
+### 8.1 DRY
+
+Avoid duplicated knowledge, invariants, and logic.
+
+Do not abstract merely because two pieces of code currently look
+similar.
+
+Abstract repeated concepts when their shared behavior is real and likely
+to remain shared.
+
+### 8.2 Composition over inheritance
+
+Rust does not use classical inheritance.
+
+Prefer focused structures and composable behavior:
+
+``` rust
+struct Model<S, E> {
+    state: S,
+    executor: E,
+}
 ```
 
-High-reversal-cost decisions require stronger evidence.
+Avoid deep inheritance-like hierarchies expressed through increasingly
+complex traits.
 
-Examples include:
+### 8.3 Traits
 
-- storage/ownership model;
-- device abstraction;
-- synchronization model;
-- allocation model;
-- serialization/ABI;
-- foundational execution semantics.
+Introduce a trait when it provides a real semantic contract, such as:
 
-Prefer a temporary local solution when the long-term shape is not yet known.
+- multiple meaningful implementations;
+- dependency inversion;
+- backend abstraction;
+- testability;
+- stable behavioral requirements.
 
----
+Do not create a trait for every struct.
 
-## 15. Choosing the Development Tool
+### 8.4 Extension traits
 
-Use the simplest tool that answers the current question.
+Use extension traits for coherent domain-specific behavior on types
+Seqvex does not own.
 
-### Rust compiler / Cargo
+Do not use them merely to rename trivial methods or hide simple code.
 
-Use Cargo and the compiler for:
+### 8.5 Builder pattern
 
-- compilation;
-- dependency resolution;
-- unit/integration tests;
-- formatting;
-- package validation;
-- workspace management.
+Use builders where construction involves meaningful configuration,
+optional parameters, validation, or staged construction.
 
-Typical commands:
+Do not introduce a builder for a trivial structure.
 
-```bash
-cargo check
+### 8.6 Typestate
+
+Use typestate where compile-time state distinctions provide meaningful
+correctness guarantees.
+
+It may become useful for:
+
+- lifecycle management;
+- runtime state machines;
+- initialization/ready states;
+- asynchronous state transitions.
+
+Do not build a speculative typestate framework before the problem
+exists.
+
+### 8.7 Newtype pattern
+
+Use newtypes when distinct semantic values should not be
+interchangeable:
+
+``` rust
+struct ObservationId(u64);
+struct SequenceNumber(u64);
+```
+
+Do not wrap every primitive merely for abstraction's sake.
+
+### 8.8 Error enums
+
+Prefer explicit domain-specific error types:
+
+``` rust
+enum UpdateError {
+    InvalidInput,
+    NumericalFailure,
+    InvariantViolation,
+}
+```
+
+Prefer `Result<T, E>` and structured error propagation.
+
+Avoid stringly typed core errors.
+
+Avoid unnecessary `unwrap()` and `expect()` in production paths.
+
+If an `unwrap()` or `expect()` is justified by an invariant, the
+invariant should be clear.
+
+### 8.9 Iterators and functional style
+
+Prefer iterator composition when it improves clarity without causing a
+material performance problem.
+
+``` rust
+let sum: f64 = values.iter().copied().sum();
+```
+
+Do not force functional style when an explicit loop is clearer or
+measured to be more appropriate.
+
+------------------------------------------------------------------------
+
+## 9. Numerical Foundation
+
+Seqvex requires numerical computation for ML/RL, but it is not intended
+to replace general-purpose scientific or data-processing ecosystems.
+
+Seqvex should not become:
+
+- NumPy;
+- SciPy;
+- Pandas;
+- Polars;
+- a dataframe engine;
+- general statistical software.
+
+Numerical primitives should be introduced incrementally when they
+support actual ML/RL requirements.
+
+Possible foundations include:
+
+- sums;
+- means;
+- variance;
+- covariance;
+- dot products;
+- vector norms;
+- online statistics;
+- rolling statistics;
+- matrix/vector operations required by implemented algorithms.
+
+Do not build a complete numerical ecosystem before real Seqvex workloads
+justify it.
+
+------------------------------------------------------------------------
+
+## 10. Execution and State Semantics
+
+Implementation should preserve the distinction between:
+
+``` text
+single observation
+streaming / online
+micro-batch
+batch
+```
+
+and:
+
+``` text
+CPU
+GPU / accelerator
+heterogeneous
+```
+
+A backend optimization must not accidentally redefine the algorithm's
+temporal or state semantics.
+
+### State update contract
+
+A stateful update should conceptually behave as:
+
+``` text
+current valid state
+       │
+       ▼
+compute candidate
+       │
+       ▼
+validate candidate
+       │
+   ┌───┴───┐
+   │       │
+ valid   invalid
+   │       │
+   ▼       ▼
+commit   preserve
+state    prior state
+```
+
+The precise implementation mechanism is deliberately not fixed.
+
+Possible mechanisms include:
+
+- transactional construction;
+- checkpoint/restore;
+- copy-on-write;
+- double buffering;
+- rollback information;
+- algorithm-specific approaches.
+
+Choose the mechanism only after the actual state model and failure
+characteristics are understood.
+
+------------------------------------------------------------------------
+
+## 11. Failure, Recovery, and Determinism
+
+Failure handling is part of the architecture, not an afterthought.
+
+Relevant failure classes include:
+
+- invalid input;
+- numerical failure;
+- model/state invariant failure;
+- memory/allocation failure;
+- runtime failure;
+- hardware/device failure.
+
+For every stateful operation, consider:
+
+1. What can fail?
+2. Can the current state remain valid?
+3. Can the operation be retried safely?
+4. Is rollback meaningful?
+5. Should processing continue?
+6. Should the component be isolated?
+7. Should execution terminate?
+8. What must be reported?
+9. Does recovery preserve deterministic semantics?
+
+Rollback is not universal.
+
+Do not add rollback machinery simply because failure exists.
+
+Detailed requirements belong in:
+
+`docs/FAILURE_AND_RECOVERY.md`
+
+------------------------------------------------------------------------
+
+## 12. Testing
+
+Testing should establish behavior and invariants, not merely increase
+coverage numbers.
+
+For foundational components, test:
+
+- valid behavior;
+- invalid inputs;
+- boundary conditions;
+- ordering;
+- state transitions;
+- state preservation after failure;
+- repeated streaming updates;
+- deterministic behavior where promised;
+- numerical edge cases;
+- single-observation semantics;
+- bounded micro-batch semantics where implemented.
+
+Where meaningful, test properties rather than only examples.
+
+### Test ownership
+
+A focused sub-functional component should be small enough to own focused
+tests.
+
+Tests should help answer:
+
+> **What invariant does this component guarantee?**
+
+rather than merely:
+
+> **Does this line execute?**
+
+------------------------------------------------------------------------
+
+## 13. Clippy and Formatting
+
+Clippy is part of the development baseline.
+
+Use:
+
+``` bash
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test
-cargo fmt
-cargo clippy
-cargo build
 ```
 
-Use `cargo check` frequently during implementation because it provides fast feedback without requiring a full executable build.
+Warnings should not be suppressed casually.
 
-Use `cargo test` whenever behavior has changed.
+When an exception is genuinely justified:
 
-Use `cargo fmt` to keep formatting consistent.
+- keep the scope narrow;
+- document why it is justified;
+- avoid turning a local exception into a global policy.
 
-Use `cargo clippy` when the code is sufficiently developed for lint feedback to be useful.
+Compilation success is not sufficient evidence of correctness.
 
-### Benchmarking
+------------------------------------------------------------------------
 
-Use benchmarks when there is a concrete performance question.
+## 14. Performance Engineering
 
-Examples:
+Performance must be measured.
 
-```text
-Is this update faster?
+The preferred loop is:
 
-Did an allocation disappear?
-
-What is per-observation latency?
-
-Does micro-batching improve throughput?
-
-Does a data-layout change improve cache behavior?
+``` text
+Implement
+   ↓
+Verify correctness
+   ↓
+Benchmark
+   ↓
+Profile
+   ↓
+Identify bottleneck
+   ↓
+Optimize
+   ↓
+Benchmark again
+   ↓
+Keep or revert based on evidence
 ```
 
-Do not optimize based only on intuition.
+Potential performance surfaces include:
 
-### Profiling
+- allocations;
+- cache locality;
+- cache misses;
+- data layout;
+- alignment;
+- SIMD/vectorization;
+- branch behavior;
+- memory bandwidth;
+- synchronization;
+- contention;
+- copying;
+- CPU/accelerator transfer;
+- accelerator kernel overhead;
+- device utilization;
+- compiler/LLVM behavior.
 
-Use profiling after a measurable performance problem exists.
+> **Zero allocation is not the definition of performance.**
 
-The sequence should be:
+Likewise:
 
-```text
-observe slow behavior
-       ↓
-benchmark
-       ↓
-profile
-       ↓
-identify bottleneck
-       ↓
-change implementation
-       ↓
-benchmark again
+> **GPU execution is not automatically faster than CPU execution.**
+
+Small stateful online updates may favor CPU execution. Large parallel
+numerical workloads may benefit from accelerators. The correct choice
+depends on measured workload characteristics.
+
+Do not make performance claims without benchmarks or profiling evidence
+appropriate to the claim.
+
+------------------------------------------------------------------------
+
+## 15. Predictability and Resource Behavior
+
+Seqvex may eventually be used in environments where latency, memory
+footprint, and failure behavior matter.
+
+Development should therefore remain aware of:
+
+- bounded versus unbounded work;
+- allocation behavior;
+- synchronization;
+- memory footprint;
+- state growth;
+- data movement;
+- deterministic behavior;
+- failure containment.
+
+However, do not convert future goals into present guarantees.
+
+The project should distinguish clearly between:
+
+``` text
+architectural direction
+implementation capability
+measured property
+formal guarantee
 ```
 
-Do not introduce SIMD, custom allocation, GPU execution, complex memory layouts, or other low-level optimization merely because they might be faster.
+These are not interchangeable.
 
----
+------------------------------------------------------------------------
 
-## 16. Numerical and Algorithmic References
+## 16. AI Development Contract
 
-Reference implementations and established libraries may be used to check correctness.
+AI-assisted development is expected, but AI must operate within the
+development contract.
 
-Use them to answer questions such as:
+### 16.1 Before modifying code, AI should
 
-```text
-Is the numerical result correct?
+1. Read the relevant documentation.
+2. Inspect the existing implementation.
+3. Identify existing invariants.
+4. Identify whether the requested change is architectural or local.
+5. Distinguish settled decisions from tentative and deferred decisions.
+6. Determine the smallest change that can test or implement the
+    requirement.
+7. Explain consequential assumptions before encoding them.
 
-Does the algorithm converge as expected?
+### 16.2 AI should preserve
 
-Does Seqvex produce equivalent predictions?
+- existing architectural boundaries;
+- streaming/state semantics;
+- failure atomicity;
+- type safety;
+- testability;
+- deterministic behavior where promised;
+- hardware-neutral high-level concepts;
+- deferred decisions.
 
-What performance baseline should we compare against?
-```
+### 16.3 AI must not
 
-A reference implementation is evidence for behavior, not automatically an architectural template.
+- invent architecture without approval;
+- silently settle deferred decisions;
+- create speculative abstractions;
+- create future crates prematurely;
+- introduce dependencies merely for convenience;
+- generate large opaque implementations that the developer cannot
+    understand;
+- replace foundational learning with generated code;
+- claim performance without evidence;
+- treat compilation as proof of correctness;
+- redesign unrelated components while implementing a local
+    requirement;
+- turn every possible future requirement into current infrastructure.
 
-Seqvex should remain responsible for understanding the implementation rather than blindly reproducing another framework.
+### 16.4 AI should prefer
 
----
-
-## 17. AI and Development Assistance
-
-AI tools may assist development, but the developer should understand the code being incorporated.
-
-AI can be used for:
-
-- explaining Rust concepts;
-- explaining algorithms;
-- generating small examples;
-- reviewing code;
-- identifying edge cases;
-- suggesting tests;
-- researching implementation alternatives;
-- reviewing architecture;
-- debugging a specific problem.
-
-Avoid using AI to generate large framework sections that the developer cannot personally explain and maintain.
-
-Preferred pattern:
-
-```text
-developer identifies problem
-        ↓
-AI assists with reasoning / research
-        ↓
-developer implements
-        ↓
-tests verify behavior
-        ↓
-AI reviews if useful
-        ↓
-developer understands and accepts result
-```
-
-The objective is not maximum generated code.
-
-The objective is a framework whose implementation is understood by its developers.
-
----
-
-## 18. Git and Integration
-
-Changes should remain small enough to understand and review.
-
-A useful sequence is:
-
-```text
+``` text
 small change
    ↓
-check
+explain
    ↓
 test
    ↓
-review diff
+measure
    ↓
-commit
+review
    ↓
-integrate
+next change
 ```
 
-Avoid combining unrelated architectural changes into one change where possible.
+over:
 
-When an architectural decision is still uncertain, prefer an experiment or isolated implementation over prematurely committing to a framework-wide abstraction.
-
----
-
-## 19. GitHub Actions and CI
-
-CI should automate tests that have already become meaningful locally.
-
-The initial CI pipeline should remain simple:
-
-```text
-Pull Request / Push
-        │
-        ▼
- GitHub Actions
-        │
-   ┌────┼────┐
-   ▼    ▼    ▼
- check test fmt
-   │    │    │
-   └────┼────┘
-        ▼
-     clippy
-        │
-        ▼
-   CI result
+``` text
+large generated implementation
+   ↓
+hope it matches the architecture
 ```
 
-The exact workflow can evolve as the project grows.
+AI is particularly useful as:
 
-Eventually CI may include:
+- teacher;
+- Socratic reviewer;
+- research assistant;
+- architecture reviewer;
+- code reviewer;
+- debugging assistant;
+- test designer;
+- documentation assistant.
 
-- compilation checks;
-- unit tests;
-- integration tests;
-- formatting;
-- Clippy;
-- documentation checks;
-- benchmarks or performance regression checks where justified;
-- multiple supported Rust/toolchain/platform configurations.
+The human developer retains responsibility for understanding and
+accepting consequential design decisions.
 
-The important principle is:
+------------------------------------------------------------------------
 
-> **CI should automate established project requirements, not become a source of arbitrary process overhead.**
+## 17. Change Classification
 
----
+Before making a significant change, classify it.
 
-## 20. From Test Case to CI
+### Local implementation change
 
-The intended progression is:
+Examples:
 
-```text
-Developer defines behavior
-        ↓
-Developer writes test case
-        ↓
-Developer implements code
-        ↓
-Test passes locally
-        ↓
-Component becomes integrated
-        ↓
-Integration tests are added
-        ↓
-Tests become stable
-        ↓
-GitHub Actions runs them automatically
+- fixing a bug;
+- improving a focused function;
+- adding a test;
+- implementing an already-decided mechanism.
+
+Proceed within existing architecture.
+
+### Architectural change
+
+Examples:
+
+- changing state semantics;
+- changing execution semantics;
+- introducing a new abstraction boundary;
+- changing ownership or storage strategy;
+- introducing a new backend model;
+- changing crate responsibilities.
+
+Stop and document the decision before implementation.
+
+### Experimental change
+
+If the correct architecture is uncertain:
+
+> **Build an experiment instead of prematurely committing to an
+> abstraction.**
+
+Experiments should be:
+
+- small;
+- isolated;
+- measurable;
+- disposable.
+
+A successful experiment provides evidence. It does not automatically
+become production architecture.
+
+------------------------------------------------------------------------
+
+## 18. Deferred Decisions
+
+The following should remain deliberately open until implementation
+experience provides evidence:
+
+- exact tensor/storage representation;
+- memory ownership model;
+- allocator architecture;
+- device abstraction;
+- backend abstraction;
+- synchronization model;
+- execution scheduler;
+- graph/operator representation;
+- exact crate boundaries;
+- exact model trait hierarchy;
+- serialization format;
+- plugin architecture;
+- GPU backend strategy;
+- unified memory strategy;
+- zero-copy strategy;
+- sparse representation;
+- distributed execution;
+- multi-node execution;
+- exact reinforcement-learning abstractions;
+- exact deep-learning abstractions.
+
+A blank or undecided area is not an invitation to invent an answer.
+
+> **Deferred means intentionally deferred.**
+
+When evidence changes the decision, update the relevant architecture
+documentation and development guidance.
+
+------------------------------------------------------------------------
+
+## 19. Dependency and Abstraction Discipline
+
+Every abstraction introduces:
+
+- conceptual complexity;
+- maintenance cost;
+- API surface;
+- compile-time consequences;
+- potential performance implications;
+- future compatibility constraints.
+
+Therefore:
+
+> **Prefer the smallest abstraction that accurately represents a
+> demonstrated recurring requirement.**
+
+Do not abstract for hypothetical reuse.
+
+Do not optimize for theoretical elegance at the expense of
+understanding.
+
+Do not allow the desire for a sophisticated architecture to outrun the
+amount of implementation evidence available.
+
+------------------------------------------------------------------------
+
+## 20. Documentation Discipline
+
+Documentation should record:
+
+- what was decided;
+- why it was decided;
+- what evidence supports it;
+- what remains uncertain;
+- what alternatives were rejected when the rejection matters;
+- what would cause the decision to be revisited.
+
+Do not document speculation as fact.
+
+Use clear labels where appropriate:
+
+- **Current**
+- **Tentative**
+- **Deferred**
+- **Experimental**
+- **Measured**
+- **Not yet demonstrated**
+
+Architecture documentation should explain durable reasoning.
+
+Code comments should explain local reasoning that is not obvious from
+the code.
+
+Avoid comments that merely restate syntax.
+
+------------------------------------------------------------------------
+
+## 21. Integration Discipline
+
+Before integrating a meaningful change:
+
+``` text
+Understand
+  ↓
+Implement
+  ↓
+Format
+  ↓
+Test
+  ↓
+Clippy
+  ↓
+Benchmark/profile if relevant
+  ↓
+Review architecture impact
+  ↓
+Update documentation if the decision changed
+  ↓
+Integrate
 ```
 
-This allows the same test suite to serve as:
+A change is not complete merely because it compiles.
 
-```text
-learning tool
-      +
-development specification
-      +
-regression protection
-      +
-CI verification
-```
+For foundational changes, ask:
 
----
+- Does the state model remain valid?
+- Does failure remain atomic?
+- Does streaming semantics remain intact?
+- Are ordering and temporal assumptions preserved?
+- Did a local implementation accidentally freeze a deferred
+    architectural decision?
+- Did the change introduce unnecessary dependencies?
+- Did it create an abstraction whose value has not been demonstrated?
 
-## 21. Definition of Done
+------------------------------------------------------------------------
 
-A small Seqvex capability should generally move through:
+## 22. Current Development Priority
 
-```text
-Problem understood
-      ↓
-Expected behavior defined
-      ↓
-Implementation written
-      ↓
-Tests pass
-      ↓
-Failure / edge cases considered
-      ↓
-Integrated where appropriate
-      ↓
-Benchmark if performance matters
-      ↓
-Documented
-      ↓
-CI coverage added when stable
-```
+Seqvex should be built from its foundations outward.
 
-Not every experiment needs to reach the final stage.
+The initial conceptual foundation is:
 
-Exploratory work may remain experimental until enough evidence exists to justify integration.
+1. Observation
+2. Ordering / sequence
+3. Streaming semantics
+4. State
+5. State transition
+6. Failure atomicity
+7. Minimal numerical primitives
+8. Single-observation and bounded micro-batch semantics
 
----
+Do not begin by implementing the full ML/RL framework.
 
-## 22. Development Principles
+The objective of the foundation is to establish the semantics on which
+later algorithms can depend.
 
-The following principles guide Seqvex development:
+------------------------------------------------------------------------
 
-> **Understand before abstracting.**
+## 23. What Success Looks Like
 
-> **Write code that you can personally explain and maintain.**
+Early Seqvex development is successful when the project increasingly
+demonstrates:
 
-> **Use tests to define and protect behavior.**
+- clear semantics;
+- understandable Rust;
+- explicit invariants;
+- strong tests;
+- controlled failure behavior;
+- measured performance;
+- justified abstractions;
+- useful modular boundaries;
+- preserved hardware flexibility;
+- a credible path toward streaming and constrained execution.
 
-> **Use TDD where it helps; do not apply it mechanically.**
+It is **not** measured by:
 
-> **Use DRY to remove duplicated knowledge, not merely duplicated syntax.**
+- number of crates;
+- number of algorithms implemented;
+- number of abstractions;
+- amount of generated code;
+- number of dependencies;
+- premature GPU support;
+- theoretical performance claims.
 
-> **Do not create traits, crates, or framework-wide abstractions without a demonstrated reason.**
+------------------------------------------------------------------------
 
-> **Benchmark before optimizing.**
+## 24. Guiding Rules
 
-> **Profile before making performance assumptions.**
+When uncertain, return to these rules:
 
-> **Keep experiments small and reversible where architecture is uncertain.**
+1. **Understand before abstracting.**
+2. **Streaming-first does not mean batchless.**
+3. **Separate computation semantics from hardware placement.**
+4. **Treat state transitions as explicit operations with failure
+    boundaries.**
+5. **Preserve valid state when an update fails.**
+6. **Keep heterogeneous memory and hardware locality possible.**
+7. **Remain std-first while preserving a practical path toward
+    constrained/no_std foundations.**
+8. **Define scope by process responsibility, not function names.**
+9. **Create modules and crates only when meaningful boundaries
+    emerge.**
+10. **Document shared context at the functional-module level.**
+11. **Use Rust patterns because they solve problems, not because they
+    are fashionable.**
+12. **Measure performance before optimizing.**
+13. **Do not turn future goals into present guarantees.**
+14. **Do not silently resolve deferred architectural decisions.**
+15. **Keep AI-generated changes small enough to understand and review.**
+16. **Prefer experiments when architecture is uncertain.**
+17. **Let implementation evidence shape the architecture.**
 
-> **Automate established requirements through CI.**
+------------------------------------------------------------------------
 
-> **Let observed constraints, rather than imagined requirements, drive permanent architecture.**
+## 25. Relationship to Other Documentation
+
+`DEVELOPMENT.md` is the **canonical development contract**.
+
+Other documents serve narrower purposes:
+
+-----------------------------------------------------------------------
+  Document                            Purpose
+----------------------------------- -----------------------------------
+  `README.md`                         Project identity, vision, scope,
+                                      and public orientation
+
+  `ARCHITECTURE.md`                   Architectural reasoning, system
+                                      structure, and design decisions
+
+  `DEVELOPMENT.md`                    Development rules for humans and AI
+
+  `FAILURE_AND_RECOVERY.md`           Failure paths, state integrity, and
+                                      recovery principles
+
+  `CONTRIBUTING.md`                   Contributor participation and
+                                      contribution process
+
+  `KILOCODE_CONTEXT.md`               AI-oriented architectural
+                                      comprehension before repository
+                                      work
+
+  `KILO_SCAFFOLD.md`                  Current KiloCode scaffolding
+                                      constraints
+  -----------------------------------------------------------------------
+
+If another document conflicts with this development contract, determine
+whether the conflict represents:
+
+1. an outdated document;
+2. a deliberate architectural change;
+3. a missing clarification.
+
+Do not silently choose one interpretation.
+
+Update the relevant documentation when a durable decision changes.
+
+------------------------------------------------------------------------
+
+## Final Principle
+
+> **Seqvex should be built by learning the problem deeply, implementing
+> the smallest understandable mechanism, measuring its behavior, and
+> allowing evidence---not speculation---to determine the architecture.**
