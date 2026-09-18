@@ -230,7 +230,9 @@ Integrate
 ## Documentation
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — detailed technical architecture, execution model, layers, hardware direction, decisions, and deferred design questions.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution and development principles.
+- [`FAILURE_AND_RECOVERY.md`](docs/FAILURE_AND_RECOVERY.md)  — detailed potential recourse and address all critical failure events.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution principles.
+- [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) — development principles.
 - [`LICENSE`](LICENSE) — Apache License 2.0.
 
 ## Repository structure
