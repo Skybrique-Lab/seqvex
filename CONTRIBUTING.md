@@ -12,6 +12,12 @@ For significant changes, especially changes involving architecture, execution, m
 
 Small fixes and clearly scoped improvements can generally proceed directly.
 
+Please read the below documents, before contributing, it will greatly help you in understanding seqvex:
+
+1. [`ARCHITECTURE.md`](ARCHITECTURE.md)
+2. [`DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+3. [`FAILURE_AND_RECOVERY.md`](docs/FAILURE_AND_RECOVERY.md)
+
 ## Do
 
 ### Understand before optimizing
