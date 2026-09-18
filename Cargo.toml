@@ -2,6 +2,10 @@
 name = "seqvex"
 version = "0.1.0"
 edition = "2024"
+description = "A Rust-native machine learning and reinforcement learning framework for sequential, non-IID, and streaming workloads."
+license = "Apache-2.0"
+repository = "https://github.com/Skybrique-Lab/seqvex"
+readme = "README.md"
 
 [workspace]
 resolver = "3"
