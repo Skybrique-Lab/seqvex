@@ -361,7 +361,7 @@ use the measurement stages when relevant.
   deferred design questions.
 - [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) — development principles for
   humans and AI-assisted work.
-- [`ROADMAP.md`](ROADMAP.md) — current development direction and phase
+- [`ROADMAP.md`](docs/ROADMAP.md) — current development direction and phase
   planning; intentionally non-contractual.
 - [`FAILURE_AND_RECOVERY.md`](docs/FAILURE_AND_RECOVERY.md) — failure
   paths, state integrity, and recovery principles.
@@ -433,7 +433,7 @@ Before making a substantial change, read:
 1. [`ARCHITECTURE.md`](ARCHITECTURE.md)
 2. [`DEVELOPMENT.md`](docs/DEVELOPMENT.md)
 3. [`FAILURE_AND_RECOVERY.md`](docs/FAILURE_AND_RECOVERY.md)
-4. [`ROADMAP.md`](ROADMAP.md), where the change affects current phase work
+4. [`ROADMAP.md`](docs/ROADMAP.md), where the change affects current phase work
 5. [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 Architecture changes should be supported by a concrete problem, evidence,
