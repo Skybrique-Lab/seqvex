@@ -7,29 +7,42 @@ not a general-purpose numerical or scientific-computing ecosystem.
 
 ## Responsibility
 
-- Specify the contract for the smallest numerical primitives the foundation
-  needs: `sum`, `mean`, `variance`, `dot`, `norm`.
-- Specify the contract for online statistics: `online_mean`, `online_variance`.
+- `statistics` — the established `f64` primitives: `sum`, `mean`, `variance`,
+  `dot`, `norm`, `online_mean`, `online_variance`.
+- `vector` — contiguous `f32` vectors with elementwise `add`, `multiply`,
+  `scale`, `complement`, `map`.
+- `linalg` — dense row-major `f32` matrices and the affine transform `y = W x`.
+- `activations` — scalar `sigmoid` and `tanh`.
 
-## Relationship to Seqvex
+## Error semantics
 
-Seqvex requires numerical computation for ML/RL but is not NumPy, SciPy,
-Pandas, Polars, or a dataframe engine. Numerical capability is introduced only
-when an actual ML/RL requirement justifies it. See `docs/DEVELOPMENT.md` §9.
+Two numeric layers with deliberately different contracts:
+
+- `statistics` is the existing `f64` contract and fails by **panic** on
+  undefined input (empty mean/norm, mismatched `dot`, inconsistent online
+  statistics) and on non-finite input where a non-negativity invariant is
+  asserted. `sum(&[]) == 0.0`. Variance is the **population** variance
+  (divide by `N`), computed in two passes.
+- The `f32` substrate returns `Result` with `DimensionMismatch` for shape
+  errors. The GRU adds `GruError` for its own failure classes.
+
+The `f32`/`f64` split is intentional and must not be silently unified.
 
 ## Inside
 
-- `statistics` — contract signatures for the primitives above.
+- `statistics`, `vector`, `linalg`, `activations`.
 
 ## Outside
 
-- General linear algebra, matrix decompositions, dataframes, ETL, and EDA.
-- Optimized, vectorized, or hardware-accelerated implementations.
+- General linear algebra, matrix decompositions, tensors, broadcasting,
+  dataframes, ETL, EDA, autodiff, GPU kernels.
+- Optimized, vectorized, or hardware-accelerated implementations until a
+  benchmark justifies them.
 
-## Current tests / specification
+## Current tests
 
-`tests/numerical.rs` — every test is `#[ignore = "awaiting implementation"]`.
-The scaffold specifies behavior; it does not implement the algorithms.
+`tests/numerical.rs` covers normal, edge, dimension, and reference behavior for
+both layers.
 
 ## Major deferred decisions
 
@@ -37,4 +50,4 @@ The scaffold specifies behavior; it does not implement the algorithms.
   enough to fix a contract.
 - Whether the primitives remain free functions, gain a trait, or delegate to a
   mature numerical crate.
-- First-order numerical accuracy and stability requirements.
+- SIMD / transposed or packed matrix layouts are deferred until measured.
