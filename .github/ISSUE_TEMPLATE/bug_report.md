@@ -1,4 +1,4 @@
-```markdown
+---
 name: Bug report
 about: Report incorrect or unexpected behavior in Seqvex
 title: "[Bug] "
@@ -24,3 +24,15 @@ assignees: ""
 
 ```rust
 // Paste the smallest example that reproduces the problem.
+```
+
+## Environment
+
+- Seqvex version/commit:
+- Rust version:
+- OS:
+- Other relevant details:
+
+## Additional context
+
+<!-- Logs, error messages, benchmark results, or other useful information. -->

@@ -1,4 +1,3 @@
-```markdown
 ---
 name: Technical task
 about: Track an implementation, test, benchmark, documentation, or engineering task
@@ -23,12 +22,13 @@ assignees: ""
 
 ## Validation
 
-<!-- How will we know the work is correct? Examples: tests, benchmarks, clippy, documentation review. -->
+<!-- How will we determine that the work is correct? -->
+<!-- Examples: tests, benchmarks, clippy, documentation review. -->
 
 ## Out of scope
 
-<!-- Optional: explicitly record related work that should remain separate. -->
+<!-- What related work should remain separate from this task? -->
 
 ## Additional context
 
-<!-- Related issues, design documents, benchmarks, or decisions. -->
+<!-- Related issues, design documents, benchmarks, decisions, or other useful context. -->
