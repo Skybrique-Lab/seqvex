@@ -1612,29 +1612,29 @@ input=128 hidden=256 104,492 ns/step      9,570 obs/s   26.00 allocs/step  26,62
 
 ## Changed
 
-- **Decision C (error semantics):** kept the documented panic contract for the
-  existing `f64` statistics; the new `f32` substrate and GRU use `Result`
+- **Error semantics.** The existing `f64` statistics keep their documented panic
+  contract; the new `f32` substrate and GRU return `Result`
   (`DimensionMismatch`, `GruError`). No existing semantics were silently changed.
-- **Decision D (execution vs foundation duplication):** the execution layer
-  composes `process_one`/`process_stream`; the fold exists in exactly one place.
-  No duplication and no foundation rewrite.
-- **Decision F (`forbid(unsafe_code)`):** unchanged. No measurement justified
-  SIMD, so the narrow-unsafe escape hatch was not opened.
+- **Execution vs foundation duplication.** The execution layer composes
+  `process_one`/`process_stream`; the fold exists in exactly one place. No
+  duplication and no foundation rewrite.
+- **`forbid(unsafe_code)`.** Unchanged. No measurement justified SIMD, so the
+  narrow-unsafe escape hatch was not opened.
 - No architectural abstraction was frozen: no universal model/tensor/device/
   optimizer interface was introduced.
 
 ## Deferred
 
-- **Decision G (sprint record filename):** the document recommends
+- **Sprint record filename.** The document recommends
   `docs/KILO_CONNECTOME_SPRINT.md`, but the file on disk is
   `docs/KILO_CONNECTOME_SPRINT_REVISED.md`. §33 says to update *this* document,
   and moving/renaming it would rewrite repository history, so this section was
   appended to the existing file. **Confirm whether to rename it.**
-- **Connectome adapter (decision E):** blocked on the external competition
-  interface; the boundary is specified, the files are not written.
-- **Allocation reduction:** 26 allocs/step is measured but not yet optimized;
+- **Connectome adapter.** Blocked on the external competition interface; the
+  boundary is specified, the files are not written.
+- **Allocation reduction.** 26 allocs/step is measured but not yet optimized;
   a scratch-buffer or in-place strategy needs its own benchmark comparison.
-- **SIMD / transposed or packed layouts:** deferred until a measured hot path
+- **SIMD / transposed or packed layouts.** Deferred until a measured hot path
   justifies them (§19).
 - **`.gitignore` ignores `AGENTS.md`** (§28): raised, not changed. Confirm whether
   the Ponytail instruction file should be version-controlled.
@@ -1646,4 +1646,39 @@ benchmark` is real and tested. The remaining work is the measured optimization
 loop (budgeted by the allocation evidence) and the externally blocked Connectome
 adapter. Absent that interface, normal Seqvex roadmap work resumes; GRU, CPU,
 and SIMD remain sprint artifacts, not permanent architecture.
+
+## Reconciliation audit
+
+A reconciliation audit (governed by `docs/KILO_SPRINT_RECONCILIATION.md`) compared
+the repository against this specification and the architecture docs. It found **no
+behavioral or correctness defects**: the GRU recurrence matches its documented
+convention against an independent scalar reference, failure atomicity is structural
+via `StateModel`, and the execution layer composes the foundation fold without
+duplication. No competing state model, tensor/device/optimizer abstraction, or
+speculative directory was introduced.
+
+One **gate defect** was found and repaired minimally.
+`src/foundation/numerical/statistics.rs` had reverted to its unimplemented stub
+form — stray imports, a stale `#![allow(unused_variables)]`, stale "not
+implemented" module docs, and Clippy lints — which failed
+`cargo clippy --all-targets --all-features -- -D warnings`. The hand-written
+algorithms were preserved (two-pass population variance, Welford-style online
+variance); only the surrounding defects were removed.
+
+Status distinctions used by this record:
+
+- **Implemented** — foundation, `f32` substrate, `f64` statistics, streaming
+  execution, stateful GRU, tests, benches, examples.
+- **Measured** — the benchmark numbers above. These are **measurements, not
+  profile-confirmed bottlenecks**.
+- **Profiled** — nothing. No profiler has been run.
+- **Deferred** — profiling, auto-vectorization/SIMD evaluation, and allocation
+  reduction, pending evidence.
+- **Blocked** — the Connectome adapter, pending the external competition interface.
+- **Future** — everything in the broader Seqvex roadmap (§33).
+
+The only changes during reconciliation were the `statistics.rs` repair and the
+two documentation corrections above (the closeout no longer depends on the
+implementation plan's private decision labels, and the statuses are stated
+directly). The sprint closes here.
 

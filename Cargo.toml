@@ -11,3 +11,11 @@ readme = "README.md"
 resolver = "3"
 
 [dependencies]
+
+[[bench]]
+name = "numerical"
+harness = false
+
+[[bench]]
+name = "gru"
+harness = false
