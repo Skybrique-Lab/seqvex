@@ -180,6 +180,131 @@ Changes affecting the following areas should receive additional scrutiny:
 
 When proposing such a change, explain the problem and alternatives before committing to a particular implementation.
 
+## Issue Classification and Labels
+
+Seqvex uses several independent classification dimensions for GitHub Issues. These
+dimensions should not be treated as interchangeable.
+
+### Issue Type
+
+Seqvex currently uses exactly three GitHub Issue Types:
+
+- **Bug** — an unexpected problem or behavior.
+- **Feature** — a request, idea, or new functionality.
+- **Task** — a specific piece of work.
+
+Do not introduce additional Issue Types without first discussing and approving
+the change.
+
+### Area labels
+
+Labels using the `area::*` namespace identify the functional or architectural
+area to which the Issue belongs.
+
+Area labels should normally correspond to meaningful functional or architectural
+areas of the repository, rather than reproducing every level of the filesystem
+hierarchy.
+
+The current area labels are:
+
+- `area::benchmark` — `/benches`
+- `area::numerical` — `src/foundation/numerical`
+- `area::observation` — `src/foundation/observation`
+- `area::ordering` — `src/foundation/ordering`
+- `area::state` — `src/foundation/state`
+- `area::streaming` — `src/foundation/streaming`
+- `area::test` — testing work as a primary area
+
+The exact file, module, function, or deeper subdirectory should be identified
+in the Issue body when relevant.
+
+`area::test` should be used when the work itself belongs to testing. It should
+not be added merely because tests are used to validate another Issue.
+
+Do not create area labels for individual files, functions, or one-off tasks.
+
+### Nature labels
+
+Nature labels describe the broad characteristic of the work. They are
+independent of Issue Type and Area and should be used when they provide useful
+additional classification.
+
+Current nature-oriented labels include:
+
+- `optimization` — optimization work
+- `documentation` — improvements or additions to documentation
+- `experimental` — work intended to investigate, validate, or falsify a hypothesis through a minimal experiment
+- `integration` — work that combines validated components or behaviors into a coherent end-to-end flow
+
+Other existing labels may also be used when their established meaning applies:
+
+- `accessibility` — barrier affecting people with disabilities
+- `bug` — something isn't working
+- `duplicate` — this issue or pull request already exists
+- `enhancement` — new feature or request
+- `good first issue` — good for newcomers
+- `help wanted` — extra attention is needed
+- `invalid` — this doesn't seem right
+- `question` — further information is requested
+- `wontfix` — this will not be worked on
+
+These labels should be applied according to their established meaning rather
+than used as substitutes for the Issue Type.
+
+### Label selection
+
+When applicable, an Issue should normally have:
+
+- one appropriate GitHub Issue Type;
+- one primary `area::*` label;
+- a nature label when it provides useful additional classification.
+
+Do not create a new label merely because a particular file, function, or
+one-off task does not have an existing label.
+
+Before introducing a new label, confirm that an existing label cannot express
+the same classification and discuss the proposed addition before creating it.
+
+### Milestones
+
+A milestone identifies the development objective to which an Issue belongs.
+
+Milestones are separate from labels and should not be used as substitutes for
+Area or Nature classification.
+
+The current milestones are:
+
+- **Phase 1 — Foundations**
+- **First Sequential ML Slice**
+
+Do not create a new milestone without first discussing and approving it.
+
+### Project status
+
+Project status describes the workflow state of the Issue and is separate from
+Issue Type, Area, Nature, and Milestone.
+
+Seqvex's intended workflow is:
+
+**Planning → Implementation → Validation → Integrated**
+
+The final **Validation → Integrated** transition remains a deliberate
+integration step and should not be inferred merely because implementation or
+validation work is complete.
+
+### Classification rule
+
+Use the dimensions together:
+
+> **Issue Type = what kind of Issue**  
+> **Area = where**  
+> **Nature = what broad characteristic it has**  
+> **Milestone = which development objective**  
+> **Project status = workflow state**
+
+This separation is important because Seqvex relies heavily on labels for issue
+discovery, filtering, ownership, and contributor orientation.
+
 ## A Simple Rule
 
 When in doubt:
