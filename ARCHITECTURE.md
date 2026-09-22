@@ -762,6 +762,43 @@ Determinism may matter for reproducibility, debugging, scientific validation, an
 
 Potential nondeterminism sources include:
 
+## 23.1 Reference and production implementations
+
+Seqvex distinguishes between **reference-oriented implementations** and **production-oriented implementations**.
+
+Reference implementations prioritize mathematical transparency, deterministic behavior where useful, reproducibility, inspectability, and independent validation. They provide a semantic reference against which optimized implementations can be tested.
+
+Production implementations must support practical real-world use. Depending on the algorithm or component, this may include configurable parameters and initialization, explicit reproducibility controls where applicable, robust error handling, appropriate numerical behavior, and measured resource and performance characteristics.
+
+Determinism is therefore a **capability for reproducibility and validation**, not a requirement that every production execution be deterministic.
+
+A production implementation should not silently inherit test-only assumptions merely because those assumptions make benchmarking or validation convenient.
+
+The relationship is:
+
+```text
+Reference implementation
+    │
+    ├─ mathematical correctness
+    ├─ reproducibility
+    ├─ deterministic test cases where useful
+    └─ semantic validation
+            │
+            ▼
+Production implementation
+    │
+    ├─ practical configuration
+    ├─ appropriate initialization / randomness
+    ├─ robust runtime behavior
+    ├─ measured resource usage
+    └─ measured performance
+```
+
+Where a production implementation is optimized or specialized, it should preserve the semantics established by the reference implementation and be validated against it where practical.
+
+This distinction applies to algorithms, numerical components, execution mechanisms, and other components where deterministic reference behavior is useful for testing but would otherwise impose an artificial production constraint.
+
+
 - thread scheduling;
 - parallel reduction order;
 - floating-point behavior;
@@ -814,7 +851,7 @@ Where useful, compare:
 - predictions;
 - performance.
 
-Reference implementations validate behavior; they do not automatically determine architecture.
+Reference implementations validate behavior; they do not automatically determine architecture. Production implementations may differ in execution strategy or configuration, but their externally relevant semantics should remain consistent with the validated reference behavior.
 
 ## 25. Documentation and contributor model
 
