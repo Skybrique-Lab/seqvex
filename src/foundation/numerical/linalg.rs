@@ -80,15 +80,13 @@ impl Matrix {
             });
         }
         let input = input.as_slice();
-        let mut output = Vec::with_capacity(self.rows);
-        for row in 0..self.rows {
+        Ok(Vector::from_fn(self.rows, |row| {
             let start = row * self.cols;
-            let mut sum = 0.0_f32;
-            for (weight, value) in self.data[start..start + self.cols].iter().zip(input) {
-                sum += weight * value;
-            }
-            output.push(sum);
-        }
-        Ok(Vector::from_slice(&output))
+            self.data[start..start + self.cols]
+                .iter()
+                .zip(input)
+                .map(|(weight, value)| weight * value)
+                .sum()
+        }))
     }
 }
