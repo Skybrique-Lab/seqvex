@@ -84,9 +84,9 @@ impl GruParameters {
     /// ponytail: this is a fixed LCG, not a trained or statistically sound
     /// initialization. It exists so a GRU can be constructed without adding a
     /// randomness dependency; trained parameters arrive from outside the core.
-    /// however once we finalize and validate the algorithm; consider 
+    /// however once we finalize and validate the algorithm; consider
     /// including hull-dobell therom we may need to take this apart
-    /// Bit-Truncation Efficiency included wrapping_* will overflow automatically 
+    /// Bit-Truncation Efficiency included wrapping_* will overflow automatically
     /// discard low-order bits and extracting only most significant bits
     pub fn deterministic(input_dim: usize, hidden_dim: usize) -> Self {
         let mut state = 0x5eed_5eed_5eed_5eed_u64;
