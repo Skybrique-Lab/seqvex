@@ -21,7 +21,23 @@
 //! candidate and commits it only on success. A failed step leaves the
 //! previously committed hidden state untouched. [`Gru::step`] is a thin
 //! stateful wrapper over that transition.
+//!
+//! # Reference and production paths
+//!
+//! [`Gru::step`] and the [`StateModel::update`] implementation are the
+//! **reference** path: value-returning, allocating one `Vector` per operation,
+//! and the semantic oracle every optimized path must be tested against.
+//!
+//! [`Gru::step_in_place`] and [`Gru::update_in_place`] are an **experimental
+//! production** path. They reuse a private workspace, allocate nothing in
+//! steady state, and are bit-identical to the reference path in the tested
+//! range. The design is **provisional**: the workspace is owned by the model and
+//! reached through `&mut Gru`, which is under a CRITICAL architecture review
+//! because it couples immutable, shareable weights with per-stream scratch and
+//! prevents multiple executors from sharing one model. Do not treat this API as
+//! settled, and do not generalize the workspace to other models yet.
 
+use crate::execution::streaming::StreamingExecutor;
 use crate::foundation::numerical::{DimensionMismatch, Matrix, Vector, sigmoid, tanh};
 use crate::foundation::observation::Observation;
 use crate::foundation::state::StateModel;
@@ -110,6 +126,31 @@ impl GruParameters {
     }
 }
 
+/// Reusable scratch storage for the allocation-free production path.
+///
+/// Allocated once per model and reused every observation, so the production
+/// step allocates nothing in steady state. It never aliases the committed
+/// hidden state.
+#[derive(Debug)]
+struct Workspace {
+    /// Holds `z_t`, then `(1 − z_t) ⊙ h`, then the committed candidate `h_t`.
+    acc: Vec<f32>,
+    /// Holds `r_t`, then `r_t ⊙ h`, then the candidate `h̃_t`.
+    gate: Vec<f32>,
+    /// Mat-vec partials and the `z_t ⊙ h̃_t` blend term.
+    scratch: Vec<f32>,
+}
+
+impl Workspace {
+    fn new(hidden_dim: usize) -> Self {
+        Self {
+            acc: vec![0.0; hidden_dim],
+            gate: vec![0.0; hidden_dim],
+            scratch: vec![0.0; hidden_dim],
+        }
+    }
+}
+
 /// A stateful GRU with a committed hidden state.
 #[derive(Debug)]
 pub struct Gru {
@@ -117,6 +158,7 @@ pub struct Gru {
     hidden_dim: usize,
     parameters: GruParameters,
     hidden: Vector,
+    workspace: Workspace,
 }
 
 impl Gru {
@@ -146,6 +188,7 @@ impl Gru {
             hidden_dim,
             parameters,
             hidden: Vector::zeros(hidden_dim),
+            workspace: Workspace::new(hidden_dim),
         })
     }
 
@@ -176,6 +219,54 @@ impl Gru {
     /// Resets the hidden state to zeros, starting a new sequence.
     pub fn reset(&mut self) {
         self.hidden = Vector::zeros(self.hidden_dim);
+    }
+
+    /// Advances the committed hidden state using the reusable workspace.
+    ///
+    /// This production path allocates nothing in steady state and commits the
+    /// candidate only after validation, so a failed step leaves the committed
+    /// state unchanged. It is numerically equivalent to [`Gru::step`]; the test
+    /// suite verifies bitwise agreement.
+    ///
+    /// **Provisional:** the workspace is model-owned and reached through
+    /// `&mut self`; this API shape is under a CRITICAL architecture review and
+    /// is not settled.
+    pub fn step_in_place(
+        &mut self,
+        observation: &Observation<Vector>,
+    ) -> Result<&Vector, GruError> {
+        {
+            let Self {
+                parameters,
+                workspace,
+                hidden,
+                ..
+            } = self;
+            compute_in_place(parameters, workspace, hidden, observation)?;
+        }
+        Ok(&self.hidden)
+    }
+
+    /// Computes the candidate for `observation` into `state` using the reusable
+    /// workspace, committing it only after validation.
+    ///
+    /// Exposes the production path over an explicit state so streaming execution
+    /// can drive it without owning the model's hidden state.
+    ///
+    /// **Provisional:** the workspace is model-owned and reached through
+    /// `&mut self`; this API shape is under a CRITICAL architecture review and
+    /// is not settled.
+    pub fn update_in_place(
+        &mut self,
+        state: &mut Vector,
+        observation: &Observation<Vector>,
+    ) -> Result<(), GruError> {
+        let Self {
+            parameters,
+            workspace,
+            ..
+        } = self;
+        compute_in_place(parameters, workspace, state, observation)
     }
 
     fn compute(
@@ -274,4 +365,142 @@ fn validate_vector(vector: &Vector, len: usize) -> Result<(), GruError> {
         return Err(GruError::NonFiniteParameter);
     }
     Ok(())
+}
+
+/// Computes one GRU step into `state` using only reusable workspace storage.
+///
+/// The operation order matches [`Gru::compute`] exactly, so the result is
+/// bit-identical to the reference path. `state` is read as the previous hidden
+/// state and overwritten only after the candidate is validated.
+fn compute_in_place(
+    parameters: &GruParameters,
+    workspace: &mut Workspace,
+    state: &mut Vector,
+    observation: &Observation<Vector>,
+) -> Result<(), GruError> {
+    let input = observation.value();
+    if input.len() != parameters.w_z.cols() {
+        return Err(GruError::DimensionMismatch {
+            expected: parameters.w_z.cols(),
+            actual: input.len(),
+        });
+    }
+    if state.len() != parameters.u_z.rows() {
+        return Err(GruError::DimensionMismatch {
+            expected: parameters.u_z.rows(),
+            actual: state.len(),
+        });
+    }
+    if !input.as_slice().iter().all(|value| value.is_finite()) {
+        return Err(GruError::NonFiniteInput);
+    }
+
+    {
+        let h = state.as_slice();
+        let x = input.as_slice();
+
+        // acc = sigmoid(W_z x + U_z h + b_z)
+        matvec_into(&parameters.w_z, x, &mut workspace.acc);
+        matvec_into(&parameters.u_z, h, &mut workspace.scratch);
+        add_assign(&mut workspace.acc, &workspace.scratch);
+        add_assign(&mut workspace.acc, parameters.b_z.as_slice());
+        sigmoid_assign(&mut workspace.acc);
+
+        // gate = sigmoid(W_r x + U_r h + b_r)
+        matvec_into(&parameters.w_r, x, &mut workspace.gate);
+        matvec_into(&parameters.u_r, h, &mut workspace.scratch);
+        add_assign(&mut workspace.gate, &workspace.scratch);
+        add_assign(&mut workspace.gate, parameters.b_r.as_slice());
+        sigmoid_assign(&mut workspace.gate);
+
+        // gate = tanh(W_h x + U_h (gate ⊙ h) + b_h)
+        mul_assign(&mut workspace.gate, h);
+        matvec_into(&parameters.u_h, &workspace.gate, &mut workspace.scratch);
+        matvec_into(&parameters.w_h, x, &mut workspace.gate);
+        add_assign(&mut workspace.gate, &workspace.scratch);
+        add_assign(&mut workspace.gate, parameters.b_h.as_slice());
+        tanh_assign(&mut workspace.gate);
+
+        // scratch = z_t ⊙ h̃_t
+        for (scratch, (z, candidate)) in workspace
+            .scratch
+            .iter_mut()
+            .zip(workspace.acc.iter().zip(workspace.gate.iter()))
+        {
+            *scratch = *z * *candidate;
+        }
+        // acc = (1 − z_t) ⊙ h + z_t ⊙ h̃_t
+        for value in workspace.acc.iter_mut() {
+            *value = 1.0 - *value;
+        }
+        mul_assign(&mut workspace.acc, h);
+        add_assign(&mut workspace.acc, &workspace.scratch);
+    }
+
+    if !workspace.acc.iter().all(|value| value.is_finite()) {
+        return Err(GruError::NonFiniteCandidate);
+    }
+    state.as_mut_slice().copy_from_slice(&workspace.acc);
+    Ok(())
+}
+
+/// Writes `matrix · input` into `out` with the same per-row accumulation order
+/// as [`Matrix::mul_vector`].
+fn matvec_into(matrix: &Matrix, input: &[f32], out: &mut [f32]) {
+    let cols = matrix.cols();
+    let data = matrix.as_slice();
+    for (row, out_row) in out.iter_mut().enumerate() {
+        let start = row * cols;
+        let mut sum = 0.0_f32;
+        for (weight, value) in data[start..start + cols].iter().zip(input) {
+            sum += weight * value;
+        }
+        *out_row = sum;
+    }
+}
+
+fn add_assign(dst: &mut [f32], src: &[f32]) {
+    for (dst, src) in dst.iter_mut().zip(src) {
+        *dst += *src;
+    }
+}
+
+fn mul_assign(dst: &mut [f32], src: &[f32]) {
+    for (dst, src) in dst.iter_mut().zip(src) {
+        *dst *= *src;
+    }
+}
+
+fn sigmoid_assign(values: &mut [f32]) {
+    for value in values.iter_mut() {
+        *value = sigmoid(*value);
+    }
+}
+
+fn tanh_assign(values: &mut [f32]) {
+    for value in values.iter_mut() {
+        *value = tanh(*value);
+    }
+}
+
+impl<'m> StreamingExecutor<'m, Gru> {
+    /// Production streaming step: allocation-free steady state.
+    ///
+    /// Equivalent to the reference [`StateModel::update`] path; the test suite
+    /// verifies bitwise agreement. On failure the committed state is unchanged.
+    ///
+    /// **Provisional:** this is a Gru-specific entry point on the generic
+    /// executor type, reached because the workspace is model-owned. It is under
+    /// a CRITICAL architecture review and is not a settled API.
+    pub fn process_one_optimized(
+        &mut self,
+        observation: &Observation<Vector>,
+    ) -> Result<&Vector, GruError> {
+        let state = self
+            .state
+            .as_mut()
+            .expect("executor state is present between calls");
+        self.model.update_in_place(state, observation)?;
+        Ok(self.state())
+    }
 }
