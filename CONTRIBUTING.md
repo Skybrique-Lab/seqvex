@@ -305,6 +305,133 @@ Use the dimensions together:
 This separation is important because Seqvex relies heavily on labels for issue
 discovery, filtering, ownership, and contributor orientation.
 
+## Issue Lifecycle and Scope
+
+Create an Issue when work represents a distinct engineering objective that
+can be described with its own scope and acceptance criteria.
+
+Do not create a new Issue merely because an existing Issue requires an
+implementation modification, additional test, benchmark adjustment, or other
+work necessary to satisfy the same objective.
+
+If a closed Issue's original objective remains incomplete, reopen the existing
+Issue rather than creating a duplicate.
+
+Create a new Issue when work introduces a materially different objective,
+scope, acceptance criteria, API contract, architectural change, or
+independently meaningful optimization.
+
+A new Issue should reference the related Issue when the work is a follow-up,
+regression, or consequence of earlier work.
+
+Component similarity alone is not sufficient reason to reuse an Issue. Area
+labels identify where work belongs; Issues identify the specific engineering
+objective.
+
+### Optimization and modification rule
+
+An optimization is not automatically a new Issue. Determine whether it is
+optimizing the same identified bottleneck or engineering objective.
+
+For example, additional implementation work required to complete the same
+`Matrix::mul_vector` allocation optimization remains part of that Issue.
+A later, independently scoped optimization of the GRU numerical hot path is
+a separate objective and should have its own Issue.
+
+Likewise, a modification remains part of an existing Issue when it is needed
+to satisfy that Issue's existing objective and acceptance criteria. A
+modification that introduces a materially different API contract, architectural
+change, or independently meaningful objective should be tracked separately.
+
+### Bug rule
+
+If an existing bug remains unresolved, reopen the existing Issue rather than
+creating a duplicate.
+
+If a completed Issue is followed by a genuinely new regression or distinct
+failure, create a new Bug Issue and reference the related Issue.
+
+### Do not create Issues for implementation steps
+
+Do not create a separate Issue merely for work such as:
+
+- renaming a variable;
+- adding a test required by an existing Issue;
+- fixing formatting;
+- changing an implementation approach within the existing scope;
+- updating comments or documentation required to complete the existing Issue;
+- adjusting benchmark methodology for the same optimization objective.
+
+These should normally remain within the existing Issue and its associated
+implementation work.
+
+### Seqvex Issue decision tree
+
+Use the following decision tree before creating, reopening, or reusing an
+Issue:
+
+```text
+                Does work already have an existing Issue?
+                              │
+                         ┌────┴────┐
+                         │         │
+                        Yes        No
+                         │         │
+                         ▼         ▼
+              Is it the same    Is it a
+              objective?        meaningful
+                         │       objective?
+                    ┌────┴────┐       │
+                   Yes        No      Yes
+                    │          │       │
+                    ▼          ▼       ▼
+                 SAME       NEW      CREATE
+                 ISSUE      ISSUE    ISSUE
+                    │
+                    ▼
+             Is the Issue closed?
+                    │
+               ┌────┴────┐
+              Yes        No
+               │          │
+               ▼          ▼
+            REOPEN      CONTINUE
+```
+
+The key rule is:
+
+> **Same objective → same Issue.**  
+> **New objective → new Issue.**  
+> **Closed but same objective remains incomplete → reopen.**  
+> **Completed objective followed by genuinely new work → new Issue.**
+
+### Issue planning approval
+
+Before creating, reopening, or substantially updating an Issue as part of
+work planned in ChatGPT, the proposed Issue action should be presented for
+review first.
+
+The proposal should clearly state:
+
+1. **Issue action** — create, reopen, update, or continue an existing Issue.
+2. **Issue** — the Issue number and title, when an existing Issue is involved.
+3. **Objective** — what engineering outcome the work addresses.
+4. **Planned change** — what will be investigated, modified, tested, or
+   benchmarked.
+5. **Classification** — proposed Issue Type, Area label, Nature label(s), and
+   Milestone where applicable.
+6. **Relationship** — why this belongs to the selected Issue rather than a
+   different or new Issue.
+
+Do not create, reopen, or substantially update the Issue until the user has
+given explicit approval in the chat.
+
+This approval applies especially when planning or carrying out feature
+implementation, new algorithms, modifications, optimization audits, debugging,
+benchmarking, or architectural changes.
+
+The purpose is to keep Issue scope deliberate and prevent duplicate, overly
+broad, or prematurely created Issues.
 ## A Simple Rule
 
 When in doubt:
