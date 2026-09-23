@@ -4,8 +4,10 @@
 //! Run with `cargo bench --bench gru`.
 //!
 //! `harness = false` with `std::time::Instant` keeps the sprint dependency-free.
-//! The counting allocator measures allocations per step; timings are
-//! indicative, not statistically rigorous (see `benches/numerical.rs`).
+//! The counting allocator measures allocations per step. Each path is measured
+//! over repeated runs and reported as median / min / max / IQR, because the
+//! Stage 2 decision compares reference and production paths whose differences may
+//! be small.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
@@ -13,6 +15,7 @@ use std::mem::size_of;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use seqvex::execution::streaming::StreamingExecutor;
 use seqvex::foundation::numerical::Vector;
 use seqvex::foundation::observation::Observation;
 use seqvex::models::recurrent::gru::{Gru, GruParameters};
@@ -43,7 +46,20 @@ unsafe impl GlobalAlloc for CountingAllocator {
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-const STEPS: u32 = 100_000;
+/// Repeated timing runs per path and configuration.
+///
+/// The release `bench` profile (used by `cargo bench --bench gru`) runs the full
+/// count. The debug test profile, which `cargo test --all-targets` executes for
+/// `harness = false` benchmarks, uses a single short run so the test command
+/// stays usable; those numbers are never used for decisions.
+const RUNS: usize = if cfg!(debug_assertions) { 1 } else { 20 };
+/// Workspace scratch buffers on the production path (three `H`-sized buffers).
+const WORKSPACE_BUFFERS: usize = 3;
+
+/// Shortens the measurement under the debug test profile.
+fn timed_steps(steps: u32) -> u32 {
+    if cfg!(debug_assertions) { 200 } else { steps }
+}
 
 fn parameter_bytes(parameters: &GruParameters) -> usize {
     let matrices = [
@@ -60,47 +76,123 @@ fn parameter_bytes(parameters: &GruParameters) -> usize {
     elements * size_of::<f32>()
 }
 
-fn main() {
-    println!("GRU per-step benchmark ({STEPS} steps/measurement)\n");
+fn percentile(sorted: &[f64], fraction: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let index = (((sorted.len() as f64 - 1.0) * fraction).round() as usize).min(sorted.len() - 1);
+    sorted[index]
+}
 
-    for (input_dim, hidden_dim) in [(8_usize, 16_usize), (32, 64), (128, 256)] {
-        let parameter_bytes = parameter_bytes(&GruParameters::deterministic(input_dim, hidden_dim));
-        let mut gru = Gru::new(
+/// Runs `body` for a warmup plus `RUNS` timed runs and reports per-observation
+/// allocations, bytes, and the latency distribution.
+fn measure(label: &str, steps: u32, mut body: impl FnMut()) {
+    for _ in 0..(steps / 10).max(if cfg!(debug_assertions) { 50 } else { 1000 }) {
+        body();
+    }
+
+    let mut samples = Vec::with_capacity(RUNS);
+    let mut allocations = 0.0;
+    let mut bytes = 0.0;
+    for _ in 0..RUNS {
+        let allocations_before = ALLOCATIONS.load(Ordering::Relaxed);
+        let bytes_before = ALLOCATED_BYTES.load(Ordering::Relaxed);
+        let start = Instant::now();
+        for _ in 0..steps {
+            body();
+        }
+        let elapsed = start.elapsed();
+        allocations =
+            (ALLOCATIONS.load(Ordering::Relaxed) - allocations_before) as f64 / f64::from(steps);
+        bytes = (ALLOCATED_BYTES.load(Ordering::Relaxed) - bytes_before) as f64 / f64::from(steps);
+        samples.push(elapsed.as_nanos() as f64 / f64::from(steps));
+    }
+
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median = percentile(&samples, 0.5);
+    let min = samples[0];
+    let max = samples[samples.len() - 1];
+    let q1 = percentile(&samples, 0.25);
+    let q3 = percentile(&samples, 0.75);
+    let iqr = q3 - q1;
+    let throughput = 1e9 / median;
+
+    println!(
+        "{label:<20} {median:>9.1} ns/step median (min {min:.1}, max {max:.1}, iqr {iqr:.1})  \
+         {throughput:.0} obs/s  {allocations:.2} allocs/step  {bytes:.0} bytes/step"
+    );
+}
+
+fn main() {
+    println!("GRU per-step benchmark ({RUNS} runs/measurement)\n");
+
+    for (input_dim, hidden_dim, steps) in [
+        (8_usize, 16_usize, 100_000_u32),
+        (32, 64, 50_000),
+        (128, 256, 5_000),
+        (256, 512, 2_000),
+    ] {
+        let steps = timed_steps(steps);
+        println!("input={input_dim} hidden={hidden_dim} steps={steps}");
+        let observation = Observation::new(Vector::from_fn(input_dim, |i| (i as f32 * 0.31).sin()));
+
+        let mut reference = Gru::new(
             input_dim,
             hidden_dim,
             GruParameters::deterministic(input_dim, hidden_dim),
         )
         .unwrap();
-        let observation = Observation::new(Vector::from_fn(input_dim, |i| (i as f32 * 0.31).sin()));
+        measure("direct-reference", steps, || {
+            black_box(reference.step(black_box(&observation)).unwrap());
+        });
 
-        for _ in 0..STEPS / 10 {
-            gru.step(&observation).unwrap();
-        }
+        let mut production = Gru::new(
+            input_dim,
+            hidden_dim,
+            GruParameters::deterministic(input_dim, hidden_dim),
+        )
+        .unwrap();
+        measure("direct-production", steps, || {
+            black_box(production.step_in_place(black_box(&observation)).unwrap());
+        });
 
-        let allocations_before = ALLOCATIONS.load(Ordering::Relaxed);
-        let bytes_before = ALLOCATED_BYTES.load(Ordering::Relaxed);
-        let start = Instant::now();
-        for _ in 0..STEPS {
-            black_box(gru.step(black_box(&observation)).unwrap());
-        }
-        let elapsed = start.elapsed();
+        let mut reference_model = Gru::new(
+            input_dim,
+            hidden_dim,
+            GruParameters::deterministic(input_dim, hidden_dim),
+        )
+        .unwrap();
+        let mut reference_executor =
+            StreamingExecutor::new(&mut reference_model, Vector::zeros(hidden_dim));
+        measure("streaming-reference", steps, || {
+            black_box(
+                reference_executor
+                    .process_one(black_box(&observation))
+                    .unwrap(),
+            );
+        });
 
-        let allocation_count = ALLOCATIONS.load(Ordering::Relaxed) - allocations_before;
-        let allocated_bytes = ALLOCATED_BYTES.load(Ordering::Relaxed) - bytes_before;
-        let nanoseconds = elapsed.as_nanos() as f64 / f64::from(STEPS);
+        let mut production_model = Gru::new(
+            input_dim,
+            hidden_dim,
+            GruParameters::deterministic(input_dim, hidden_dim),
+        )
+        .unwrap();
+        let mut production_executor =
+            StreamingExecutor::new(&mut production_model, Vector::zeros(hidden_dim));
+        measure("streaming-production", steps, || {
+            black_box(
+                production_executor
+                    .process_one_optimized(black_box(&observation))
+                    .unwrap(),
+            );
+        });
 
         println!(
-            "input={input_dim:<4} hidden={hidden_dim:<4} {nanoseconds:>9.1} ns/step \
-             {:>10.0} obs/s  {:.2} allocs/step  {:.0} bytes/step",
-            1e9 / nanoseconds,
-            allocation_count as f64 / f64::from(STEPS),
-            allocated_bytes as f64 / f64::from(STEPS),
-        );
-        println!(
-            "    hidden footprint {} bytes; parameters {} bytes",
+            "    hidden footprint {} bytes; workspace scratch {} bytes; parameters {} bytes\n",
             hidden_dim * size_of::<f32>(),
-            parameter_bytes,
+            WORKSPACE_BUFFERS * hidden_dim * size_of::<f32>(),
+            parameter_bytes(&GruParameters::deterministic(input_dim, hidden_dim)),
         );
-        println!();
     }
 }
