@@ -59,16 +59,36 @@ Seqvex answers these questions incrementally through implementation, testing, be
 
 ## 2. Core architectural stance
 
-Four principles currently define the architecture:
+The architecture currently rests on four principles:
 
-1. **Sequential, temporal and non-IID data is foundational.**
-2. **Streaming is the primary computational context.**
-3. **Single-observation execution is fundamental; micro-batching and larger batching are available when computationally beneficial.**
+1. **Sequential, temporal, and non-IID data is foundational.**
+2. **Streaming / online execution is the primary computational context.**
+3. **Single-observation execution is the fundamental semantic unit; bounded micro-batching is an optimization/capability, and larger batch execution is a secondary capability.**
 4. **Execution semantics are separated from compute placement.**
 
-Batching is therefore not forbidden.
+The hierarchy is intentional:
 
-The distinction is:
+```text
+semantic unit
+    ↓
+single observation
+    ↓
+primary execution context
+    ↓
+streaming / online
+    ↓
+optional execution optimizations
+    ↓
+bounded micro-batch
+    ↓
+secondary capability
+    ↓
+larger batch operations
+```
+
+This does **not** mean Seqvex cannot process large datasets or high-dimensional observations. It means that dataset size is not the organizing semantic principle. Sequential state, temporal context, ordering, and evolving computation are.
+
+Batching is therefore not forbidden.
 
 > **Batch capability is retained; batch-first semantics are not the architectural foundation.**
 
@@ -88,9 +108,21 @@ The framework should not silently discard those properties simply to fit a stati
 
 ## 4. Scope by process responsibility
 
-Seqvex differentiates its scope by **process responsibility rather than by individual function**. It owns the computational stages from ML/RL preprocessing and representation through model execution, training, validation, inference, and learning. General-purpose data ingestion, manipulation, cleaning, exploratory analysis, visualization, and storage remain outside the framework.
+Seqvex differentiates its scope by **process responsibility rather than by individual function**.
 
-This boundary is based on the **role of a computation in the ML/RL pipeline**, not on the name or category of the operation. For example, one-hot encoding, normalization/standardization, PCA, rolling statistics, online statistics, and other transformations may be implemented by Seqvex when they form part of an ML/RL computational method or pipeline. The same operation may remain outside Seqvex when used as general-purpose data analysis or manipulation.
+It owns the computational stages from:
+
+- ML/RL preprocessing and representation;
+- model computation;
+- training and learning;
+- validation;
+- inference;
+- numerical computation required by ML/RL;
+- execution/runtime mechanisms.
+
+General-purpose ingestion, storage, databases, ETL, generic data manipulation/cleaning, exploratory analysis, visualization, and domain/business logic remain outside the framework.
+
+The boundary is based on the **role of a computation in the ML/RL pipeline**, not on its name. For example, one-hot encoding, normalization/standardization, PCA, rolling statistics, and online statistics may be implemented by Seqvex when they form part of an ML/RL computational method or pipeline.
 
 Conceptually:
 
@@ -112,8 +144,6 @@ Seqvex ML/RL pipeline
         ├─ validation
         └─ inference / execution
 ```
-
-Seqvex therefore does not attempt to replace dataframe, ETL, database, visualization, or general scientific/data-analysis ecosystems. It begins where computation becomes part of the ML/RL pipeline and continues through execution.
 
 ## 5. Streaming-first execution
 
@@ -143,11 +173,9 @@ A stream can originate from live sensors, network events, application events, hi
 
 Therefore:
 
-> **Streaming describes the execution semantics, not necessarily the physical origin of the data.**
+> **Streaming describes execution semantics, not necessarily the physical origin of the data.**
 
-A historical dataset can be replayed as a stream.
-
-A live system can produce an effectively unbounded stream.
+A historical dataset can be replayed as a stream. A live system can produce an effectively unbounded stream.
 
 ## 6. Execution strategies
 
@@ -155,7 +183,7 @@ A live system can produce an effectively unbounded stream.
   <img src="assets/execution-modes.png" alt="Seqvex execution modes" width="820">
 </p>
 
-### 5.1 Single observation
+### 6.1 Single observation
 
 One observation is processed immediately.
 
@@ -170,7 +198,7 @@ Relevant to:
 
 The framework should not require an artificial batch merely to make an observation executable.
 
-### 5.2 Streaming / online
+### 6.2 Streaming / online
 
 The model maintains state while observations arrive:
 
@@ -183,7 +211,7 @@ x₃ → state₃
 
 The state may represent model parameters, hidden state, running statistics, optimizer state, policy/value state, or other algorithm-specific information.
 
-### 5.3 Optional micro-batching
+### 6.3 Optional bounded micro-batching
 
 Micro-batching accumulates a bounded number of observations:
 
@@ -207,34 +235,34 @@ It may improve:
 - arithmetic intensity;
 - throughput.
 
-Micro-batching must not silently violate:
+Micro-batching is an **optimization mechanism**, not the conceptual foundation of Seqvex.
+
+It must not silently violate:
 
 - temporal ordering;
 - causality;
-- state transition semantics;
+- state-transition semantics;
 - algorithmic online-learning semantics.
 
 The buffering policy, batch size, scheduler, and automatic batching heuristics remain undecided.
 
-### 5.4 Larger batch operations
+### 6.4 Larger batch operations
 
 Some algorithms legitimately need large-scale batch computation.
 
-Seqvex should support those operations where useful.
+Seqvex should support those operations where useful, including historical/offline computation when aggregation materially benefits an algorithm or hardware target.
 
-The architecture therefore does **not** impose:
+However:
 
-> "one observation at a time, always."
+> **Larger batch execution is a capability, not the semantic foundation of Seqvex.**
 
-Instead:
-
-> **The stream is primary; the computational granularity is workload-dependent.**
+A historical dataset may be processed sequentially, with bounded micro-batches, or with larger batches depending on the algorithm and measured execution trade-offs.
 
 ## 7. Training and inference
 
 Training and inference can both exist inside the streaming computational context.
 
-### 6.1 Historical training
+### 7.1 Historical training
 
 Historical data can be replayed:
 
@@ -249,9 +277,11 @@ x₂ → update
 xₙ → update
 ```
 
-Alternatively, the same historical source can provide batches where the algorithm benefits from them.
+Alternatively, the same historical source can provide bounded or larger batches where the algorithm benefits from them.
 
-### 6.2 Online training
+Offline training is therefore an available execution strategy, not a requirement that production systems operate with prolonged downtime.
+
+### 7.2 Online / continual training
 
 ```text
 live stream
@@ -267,7 +297,9 @@ next observation
 
 There does not need to be a fixed dataset boundary or conventional epoch structure.
 
-### 6.3 Inference
+Future online/continual learning, replay, bounded-update, and model-deployment/model-swap strategies remain open implementation questions.
+
+### 7.3 Inference
 
 Inference can operate continuously:
 
@@ -277,9 +309,9 @@ observation → prediction → next observation → prediction → ...
 
 or use bounded batching where throughput and hardware utilization justify it.
 
-### 6.4 Continual operation
+### 7.4 Continual operation
 
-A deployment may combine historical training with live adaptation:
+A deployment may combine historical initialization with live adaptation:
 
 ```text
 historical data
@@ -294,7 +326,7 @@ inference + optional online updates
       ↺
 ```
 
-This continual-learning direction is particularly aligned with the architecture.
+The architecture does not assume that production retraining must be performed as a conventional offline batch job.
 
 ## 8. Compute placement
 
@@ -313,7 +345,7 @@ Potential placement targets include:
 - accelerator;
 - heterogeneous resources.
 
-The same streaming semantics should be capable of using different implementations.
+The same execution semantics should be capable of using different implementations.
 
 ## 9. Single-device residency and heterogeneous execution
 
@@ -323,45 +355,17 @@ The preferred principle is:
 
 > **Keep model state and frequently used data resident on one device when possible. Move data only when the measured computational benefit exceeds transfer and synchronization costs.**
 
-Examples:
+The architecture must therefore preserve the ability to reason about:
 
-### CPU-resident
-
-```text
-stream
-  ↓
-CPU-resident state
-  ↓
-prediction/update
-  ↓
-next observation
-```
-
-### Accelerator-resident
-
-```text
-stream
-  ↓
-accelerator-resident state
-  ↓
-repeated computation
-  ↓
-results
-```
-
-### Deliberate heterogeneous path
-
-```text
-CPU control
-    ↓
-one meaningful transfer
-    ↓
-accelerator-heavy computation
-    ↓
-controlled result movement
-```
-
-The architecture should avoid assuming that a heterogeneous workload must continuously bounce between devices.
+- locality;
+- memory hierarchy;
+- layout;
+- alignment;
+- SIMD/vectorization;
+- bandwidth;
+- synchronization;
+- host/device movement;
+- accelerator residency.
 
 ## 10. Hardware architecture
 
@@ -427,7 +431,7 @@ Seqvex should preserve a path toward:
 
 This is a **future architectural direction**, not a claim that the current `0.1.0` release provides certified bare-metal or hard-real-time support.
 
-Likewise, Rust-native implementation does not by itself establish hard-real-time guarantees.
+Seqvex is currently **std-first** rather than universally `no_std`.
 
 ## 13. Memory and storage architecture
 
@@ -530,56 +534,18 @@ These names are illustrative.
 
 A component/crate should be created only when a meaningful boundary has emerged.
 
-### Reasons to create a boundary
-
-- dependency isolation;
-- compilation behavior;
-- API clarity;
-- independent testing;
-- backend separation;
-- reuse;
-- reduced coupling;
-- optional functionality.
-
-A crate should represent a real architectural boundary, not simply an organizational folder.
-
 ## 16. Numerical computation for ML/RL
 
-Numerical computation in Seqvex is scoped to what is required by its ML/RL methods, preprocessing and representation, validation procedures, and execution path. Seqvex does not aim to replace general-purpose numerical, scientific-computing, dataframe, or data-analysis ecosystems.
+Numerical computation in Seqvex is scoped to what is required by its ML/RL methods, preprocessing and representation, validation procedures, and execution path.
 
 The numerical foundation should be developed through small, understandable implementations.
 
-### Statistics
+Potential foundations include:
 
-- mean;
-- variance;
-- standard deviation;
-- covariance;
-- correlation;
-- weighted statistics;
-- rolling statistics;
-- exponentially weighted statistics.
-
-### Linear algebra
-
-- dot product;
-- matrix-vector multiplication;
-- matrix multiplication;
-- transpose;
-- norms;
-- LU;
-- QR;
-- Cholesky.
-
-### Online numerical computation
-
-- online mean;
-- online variance;
-- online covariance;
-- recursive estimators;
-- online gradient updates;
-- recursive least squares;
-- adaptive estimators.
+- statistics;
+- linear algebra;
+- online numerical computation;
+- ML/RL-specific numerical operations.
 
 Mature low-level Rust crates may later be used where they provide a better engineering trade-off.
 
@@ -639,59 +605,60 @@ Potential capabilities:
 
 The framework should make temporal leakage and accidental IID assumptions easier to detect.
 
-## 19. Dependency philosophy
+## 19. Automatic execution selection and explicit user control
 
-Seqvex should selectively use mature Rust crates.
+Seqvex may eventually provide two execution-control modes:
 
-A dependency should be justified by a concrete problem and should not impose unwanted architectural assumptions.
+```text
+Explicit
+    user selects execution policy
+        ↓
+    Seqvex executes that policy
 
-Avoid making foundational dependencies out of:
+Auto
+    user permits automatic selection
+        ↓
+    Seqvex evaluates relevant workload / workflow /
+    execution / hardware characteristics
+        ↓
+    selects an available execution strategy
+```
 
-- dataframe systems;
-- general ETL systems;
-- database/storage systems;
-- visualization systems;
-- heavyweight runtime layers;
-- another ML framework's architecture.
+The intended design principle is:
 
-This does not exclude implementing ML/RL-specific preprocessing or numerical operations directly when they are part of Seqvex's computational pipeline.
+> **Automatic selection should assist execution choice, not remove user control.**
 
-Existing ML implementations may serve as correctness references, benchmark baselines, or implementation references.
+A user must be able to override automatic selection through an explicit, simple policy.
 
-## 20. Rust and type-system philosophy
+Potential signals may include:
 
-Safe Rust is the default.
+- observation frequency;
+- statefulness and temporal dependence;
+- workload size and dimensionality;
+- latency requirements;
+- throughput requirements;
+- computational intensity;
+- memory behavior;
+- available CPU/GPU/accelerator resources;
+- transfer/synchronization cost;
+- whether online learning or historical replay is occurring;
+- whether bounded micro-batching preserves the algorithm's semantics.
 
-The type system should express useful invariants such as:
+Automatic selection is **future architecture only**.
 
-- dimensional compatibility;
-- ownership;
-- borrowing;
-- state;
-- device compatibility;
-- valid configuration;
-- error conditions.
+It is not currently implemented, and the scheduler, policy representation, heuristics, explainability, fallback behavior, and hardware-selection mechanism remain open.
 
-However:
+No automatic execution abstraction should be implemented until multiple real execution strategies and workloads provide enough evidence to define a stable contract.
 
-> **More generic does not automatically mean more reusable or better.**
+This future feature must preserve:
 
-Type complexity should earn its place by preventing real errors or enabling real capabilities.
+- explicit user override;
+- temporal ordering;
+- state atomicity;
+- deterministic behavior where promised;
+- hardware-aware placement freedom.
 
-### Unsafe Rust
-
-`unsafe` may be justified for:
-
-- SIMD;
-- specialized memory access;
-- FFI;
-- accelerator interfaces;
-- custom allocators;
-- low-level kernels.
-
-Unsafe boundaries require documented invariants and appropriate tests.
-
-## 21. Performance methodology
+## 20. Performance methodology
 
 Performance should be treated empirically.
 
@@ -716,425 +683,195 @@ The useful question is:
 
 > **What resource limits this workload, and does the proposed change address that limit?**
 
-Possible bottlenecks:
-
-```text
-computation
-memory latency
-cache misses
-memory bandwidth
-allocation
-branches
-synchronization
-data movement
-kernel launch
-contention
-```
-
-## 22. Predictability and real-time considerations
+## 21. Predictability and real-time considerations
 
 Seqvex may eventually serve latency-sensitive and potentially safety-relevant environments.
 
-The architecture should preserve the possibility of:
+The architecture should preserve the possibility of bounded and predictable execution.
 
-- bounded work;
-- controlled allocation;
-- predictable state updates;
-- explicit synchronization;
-- limited hidden blocking;
-- deterministic execution where feasible;
-- resource-aware deployment.
+However, do not convert future goals into present guarantees.
 
-But Seqvex should distinguish:
+Distinguish clearly between:
 
 ```text
-low latency
-predictable latency
-soft real-time
-hard real-time
+architectural direction
+implementation capability
+measured property
+formal guarantee
 ```
 
-Rust and low allocation do not by themselves establish hard-real-time guarantees.
+## 22. Reference and production implementations
 
-## 23. Determinism
-
-Determinism may matter for reproducibility, debugging, scientific validation, and controlled deployment.
-
-Potential nondeterminism sources include:
-
-## 23.1 Reference and production implementations
-
-Seqvex distinguishes between **reference-oriented implementations** and **production-oriented implementations**.
-
-Reference implementations prioritize mathematical transparency, deterministic behavior where useful, reproducibility, inspectability, and independent validation. They provide a semantic reference against which optimized implementations can be tested.
-
-Production implementations must support practical real-world use. Depending on the algorithm or component, this may include configurable parameters and initialization, explicit reproducibility controls where applicable, robust error handling, appropriate numerical behavior, and measured resource and performance characteristics.
-
-Determinism is therefore a **capability for reproducibility and validation**, not a requirement that every production execution be deterministic.
-
-A production implementation should not silently inherit test-only assumptions merely because those assumptions make benchmarking or validation convenient.
-
-The relationship is:
+Seqvex may intentionally contain both:
 
 ```text
-Reference implementation
-    │
-    ├─ mathematical correctness
-    ├─ reproducibility
-    ├─ deterministic test cases where useful
-    └─ semantic validation
-            │
-            ▼
-Production implementation
-    │
-    ├─ practical configuration
-    ├─ appropriate initialization / randomness
-    ├─ robust runtime behavior
-    ├─ measured resource usage
-    └─ measured performance
+reference implementation
+        ↓
+mathematical clarity / semantic oracle
+        ↓
+production implementation
+        ↓
+measured optimization
 ```
 
-Where a production implementation is optimized or specialized, it should preserve the semantics established by the reference implementation and be validated against it where practical.
+A production path must preserve the reference path's observable semantics.
 
-This distinction applies to algorithms, numerical components, execution mechanisms, and other components where deterministic reference behavior is useful for testing but would otherwise impose an artificial production constraint.
+The GRU allocation-free execution path is an example of this principle: its reusable workspace is currently local to the GRU and remains provisional while the long-term ownership relationship between model state, per-stream state, and reusable scratch is under architecture review.
 
+## 23. Architectural principles
 
-- thread scheduling;
-- parallel reduction order;
-- floating-point behavior;
-- random-number generation;
-- asynchronous accelerator execution.
+Current principles:
 
-Future controls should be added where technically meaningful.
+1. Sequential/temporal/non-IID computation is foundational.
+2. Single observation is the fundamental semantic unit.
+3. Streaming/online execution is the primary computational context.
+4. Micro-batching is an optimization/capability, not the semantic foundation.
+5. Larger batch execution is a secondary capability where useful.
+6. Execution semantics are separate from compute placement.
+7. State transitions must preserve valid committed state across failures.
+8. Heterogeneous memory/device locality must remain possible.
+9. Hardware-specific optimization must be evidence-driven.
+10. Storage, ownership, allocator, scheduler, backend, and device abstractions remain deliberately open until demonstrated requirements justify them.
+11. Automatic execution selection is a future capability with explicit user override; it is not a current implementation commitment.
 
-## 24. Testing and verification
+## 24. Deferred decisions
 
-### Unit tests
+The following remain deliberately open until implementation experience provides evidence:
 
-- numerical primitives;
-- state transitions;
-- model updates;
-- validation logic;
-- error handling.
+- exact tensor/storage representation;
+- memory ownership model;
+- allocator architecture;
+- device abstraction;
+- backend abstraction;
+- synchronization model;
+- execution scheduler;
+- automatic execution-selection mechanism;
+- graph/operator representation;
+- exact crate boundaries;
+- exact model trait hierarchy;
+- serialization format;
+- plugin architecture;
+- GPU backend strategy;
+- unified memory strategy;
+- zero-copy strategy;
+- sparse representation;
+- distributed execution;
+- multi-node execution;
+- exact RL abstractions;
+- exact deep-learning abstractions.
 
-### Property/invariant tests
+> **Deferred means intentionally deferred.**
 
-Examples:
+## 25. Dependency and abstraction discipline
 
-```text
-variance >= 0
-compatible dimensions remain compatible
-state transitions preserve invariants
-```
+Every abstraction introduces conceptual complexity, maintenance cost, API surface, compile-time consequences, potential performance implications, and future compatibility constraints.
 
-### Integration tests
+> **Prefer the smallest abstraction that accurately represents a demonstrated recurring requirement.**
 
-Examples:
+Do not abstract for hypothetical reuse or optimize for theoretical elegance at the expense of understanding.
 
-```text
-stream → model → prediction
-stream → online update → new state
-model → runtime → device backend
-validation → training/evaluation
-```
+## 26. Documentation discipline
 
-### Benchmarks
+Documentation should record:
 
-Benchmarks should answer specific engineering questions and remain separate from correctness tests.
+- what was decided;
+- why it was decided;
+- supporting evidence;
+- uncertainty;
+- material rejected alternatives;
+- what would cause a decision to be revisited.
 
-### Reference comparisons
+Use labels where appropriate:
 
-Where useful, compare:
+- **Current**
+- **Tentative**
+- **Deferred**
+- **Experimental**
+- **Measured**
+- **Not yet demonstrated**
 
-- numerical outputs;
-- convergence;
-- predictions;
-- performance.
+## 27. Integration discipline
 
-Reference implementations validate behavior; they do not automatically determine architecture. Production implementations may differ in execution strategy or configuration, but their externally relevant semantics should remain consistent with the validated reference behavior.
-
-## 25. Documentation and contributor model
-
-At the current stage, the architecture document intentionally provides **architectural orientation rather than a complete implementation contract**.
-
-A contributor should be able to determine:
-
-- what Seqvex is;
-- why it exists;
-- what problems it targets;
-- what is in scope;
-- what is explicitly out of scope;
-- what architectural principles must be protected;
-- which decisions are tentative;
-- which decisions are deferred;
-- why premature abstractions should be avoided.
-
-As implementation grows, this document should gain:
-
-- current component ownership;
-- actual dependency direction;
-- component contracts;
-- invariants;
-- API conventions;
-- benchmark conventions;
-- backend contribution procedures;
-- algorithm contribution procedures.
-
-Those details should be derived from actual Seqvex implementation rather than invented in advance.
-
-## 26. Development process
-
-<p align="center">
-  <img src="assets/development-process.png" alt="Seqvex development process" width="900">
-</p>
-
-The preferred development loop is:
+Before integrating a meaningful change:
 
 ```text
-Learn
-  ↓
-Implement the smallest useful experiment
-  ↓
-Test
-  ↓
-Break / find edge cases
-  ↓
 Understand
-  ↓
-Benchmark
-  ↓
-Profile
-  ↓
-Optimize
-  ↓
-Document
-  ↓
+   ↓
+Implement
+   ↓
+Format
+   ↓
+Test
+   ↓
+Clippy
+   ↓
+Benchmark/profile if relevant
+   ↓
+Review architecture impact
+   ↓
+Update documentation
+   ↓
 Integrate
 ```
 
-This is not merely a workflow preference. It is an architectural safeguard against premature generalization.
+A change is not complete merely because it compiles.
 
-## 27. Architecture decision framework
+## 28. Current development priority
 
-For every significant architectural question:
+Build Seqvex from its foundations outward:
 
-### 1. Identify the real problem
+1. Observation
+2. Ordering / sequence
+3. Streaming semantics
+4. State
+5. State transition
+6. Failure atomicity
+7. Minimal numerical primitives
+8. Single-observation semantics
+9. Bounded micro-batch semantics where demonstrated useful
 
-Do not start with the proposed abstraction.
+Do not begin by implementing the full ML/RL framework.
 
-### 2. Establish recurrence
+## 29. Success criteria
 
-Determine whether the problem occurs often enough to justify permanent architecture.
+Early success is demonstrated by clear semantics, understandable Rust, explicit invariants, strong tests, controlled failure behavior, measured performance, justified abstractions, useful modular boundaries, preserved hardware flexibility, and a credible path toward streaming and constrained execution.
 
-### 3. Measure consequences
+It is not measured by number of crates, algorithms, abstractions, generated code, dependencies, premature GPU support, or theoretical performance claims.
 
-Consider:
+## 30. Guiding rules
 
-- correctness;
-- latency;
-- throughput;
-- memory;
-- complexity;
-- operational cost;
-- portability.
+1. **Understand before abstracting.**
+2. **Streaming-first does not mean batchless.**
+3. **Single observation is the fundamental semantic unit.**
+4. **Micro-batching is an optimization, not the semantic foundation.**
+5. **Separate computation semantics from hardware placement.**
+6. **Treat state transitions as explicit operations with failure boundaries.**
+7. **Preserve valid state when an update fails.**
+8. **Keep heterogeneous memory and hardware locality possible.**
+9. **Remain std-first while preserving a practical path toward constrained/no_std foundations.**
+10. **Define scope by process responsibility, not function names.**
+11. **Create modules and crates only when meaningful boundaries emerge.**
+12. **Measure performance before optimizing.**
+13. **Treat hardware-specific optimization as evidence-driven.**
+14. **Do not turn future goals into present guarantees.**
+15. **Do not silently resolve deferred architectural decisions.**
+16. **Any change that could materially constrain hardware-aware execution, heterogeneous memory/device placement, accelerator offload, or Rust-native low-level optimization requires CRITICAL ARCHITECTURE REVIEW before implementation.**
+17. **Prefer experiments when architecture is uncertain.**
+18. **Let implementation evidence shape the architecture.**
 
-### 5. Determine reversal cost
+## 31. Relationship to other documentation
 
-#### Low
-
-- naming;
-- documentation;
-- benchmark organization;
-- local helpers.
-
-#### Moderate
-
-- crate boundaries;
-- traits;
-- configuration;
-- algorithm interfaces.
-
-#### High
-
-- execution semantics;
-- storage/ownership;
-- device abstraction;
-- synchronization;
-- allocation model;
-- serialization/ABI.
-
-High-reversal-cost decisions require stronger evidence.
-
-## 28. Current architecture decisions
-
-### ADR-001 — Streaming-first execution with optional batching
-
-**Status:** Tentative architectural direction
-
-**Decision**
-
-Seqvex treats streaming/online execution as the primary computational context.
-
-Single-observation execution is fundamental.
-
-Bounded micro-batching and larger batch operations are permitted when they provide computational or hardware efficiency without violating sequential, temporal, causal, or state semantics.
-
-**Rationale**
-
-Seqvex is designed for sequential, temporal, non-IID and continuously evolving workloads. A conventional batch-first architecture would risk making the target workload unnatural.
-
-**Not decided**
-
-- batch-size policy;
-- buffering strategy;
-- scheduler;
-- automatic batching;
-- exact stream API;
-- state-transition API.
-
-### ADR-002 — Separate execution semantics from compute placement
-
-**Status:** Tentative architectural direction
-
-**Decision**
-
-Execution semantics are independent of hardware placement.
-
-The same conceptual workload may execute on CPU, GPU, or another accelerator.
-
-**Important constraint**
-
-Heterogeneous capability does not imply unnecessary CPU↔GPU bouncing. Single-device residency is preferred when transfer and synchronization do not provide sufficient measured benefit.
-
-**Not decided**
-
-- device API;
-- backend abstraction;
-- scheduler;
-- automatic placement;
-- transfer policy.
-
-### ADR-003 — Heterogeneous memory and hardware locality
-
-**Status:** Tentative architectural direction
-
-**Decision**
-
-Seqvex must preserve the ability to optimize memory locality, cache behavior, layout, alignment, allocation, SIMD access, bandwidth, synchronization, and device movement.
-
-**Not decided**
-
-- tensor/storage abstraction;
-- allocator;
-- memory pools;
-- zero-copy;
-- unified memory;
-- exact data layout.
-
-## 29. Deliberately deferred architecture
-
-The following remain deliberately open:
-
-- tensor representation;
-- buffer representation;
-- ownership model;
-- allocator;
-- memory pool;
-- device abstraction;
-- backend abstraction;
-- scheduler;
-- synchronization model;
-- graph/operator model;
-- exact crate boundaries;
-- model trait hierarchy;
-- serialization format;
-- plugin architecture;
-- distributed execution;
-- multi-node execution;
-- exact RL architecture;
-- exact deep-learning architecture;
-- sparse representation.
-
-A blank decision is preferable to a premature decision.
-
-## 30. Architecture checkpoint
-
-| Area | Status |
+| Document | Purpose |
 |---|---|
-| Seqvex identity | Established |
-| Rust-native | Established |
-| ML + RL | Established |
-| Sequential / temporal focus | Foundational |
-| Non-IID assumption | Foundational |
-| Streaming-first execution | Tentative architectural direction |
-| Single-observation execution | Fundamental capability |
-| Optional micro-batching | Tentative optimization mechanism |
-| Larger batch operations | Permitted where useful |
-| CPU | Required execution target |
-| GPU / accelerators | Capability to preserve |
-| Heterogeneous execution | Capability to preserve |
-| Single-device residency preference | Architectural principle |
-| Heterogeneous memory awareness | Tentative architectural direction |
-| SIMD / hardware optimization | Major capability |
-| Constrained / bare-metal path | Future architectural direction |
-| Concrete storage design | Deferred |
-| Tensor design | Deferred |
-| Device abstraction | Deferred |
-| Scheduler | Deferred |
-| Graph/operator model | Deferred |
-| Crate boundaries | Not frozen |
-| Public API | Not frozen |
-| Performance optimization | Evidence-driven |
-| Unsafe Rust | Justified use only |
-| Public license | Apache-2.0 |
-| Current release | `0.1.0` |
+| `README.md` | Project identity, vision, scope, and public orientation |
+| `ARCHITECTURE.md` | Architectural reasoning, system structure, and design decisions |
+| `docs/DEVELOPMENT.md` | Development rules for humans and AI |
+| `docs/ROADMAP.md` | Current development direction and phase planning |
+| `docs/FAILURE_AND_RECOVERY.md` | Failure paths, state integrity, and recovery principles |
+| `CONTRIBUTING.md` | Contributor participation and contribution process |
 
-## 31. Guiding rules
+If another document conflicts with this architecture, determine whether the conflict is an outdated document, a deliberate architectural change, or a missing clarification. Do not silently choose one interpretation.
 
-> **Treat sequential, temporal and non-IID data as first-class architectural concerns.**
+## Final principle
 
-> **Streaming is the primary computational context; batching is a computational strategy, not the semantic foundation.**
-
-> **Process one observation immediately when the workload requires it; aggregate when computation or hardware benefits from it.**
-
-> **Keep model state and data resident on one device when possible; move data only when measured benefit justifies the cost.**
-
-> **Do not optimize until the bottleneck is measured.**
-
-> **Do not create an abstraction until you have experienced the problem it solves.**
-
-> **Do not freeze high-reversal-cost decisions without sufficient evidence.**
-
-## 32. Near-term architectural path
-
-```text
-Rust foundations
-      ↓
-numerical primitives
-      ↓
-statistics
-      ↓
-classical ML
-      ↓
-online / streaming ML
-      ↓
-temporal validation
-      ↓
-cache / allocation / SIMD fundamentals
-      ↓
-performance engineering
-      ↓
-real-time concepts
-      ↓
-Seqvex architectural experiments
-      ↓
-proven abstractions
-      ↓
-framework integration
-      ↓
-hardware specialization
-```
-
-The immediate objective is not to implement every layer in this document.
-
-It is to acquire enough implementation and measurement experience that permanent abstractions are based on **observed constraints rather than imagined requirements**.
+> **Seqvex should be built by learning the problem deeply, implementing the smallest understandable mechanism, measuring its behavior, and allowing evidence—not speculation—to determine the architecture.**

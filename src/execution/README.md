@@ -6,7 +6,7 @@ It sits between the caller and the underlying stateful model.
 
 The execution layer does not define the mathematical behavior of an ML algorithm. Instead, it coordinates the application of a model's state-transition function over observations.
 
-The fundamental execution relationship is:
+The fundamental relationship is:
 
 $$
 \text{observation}
@@ -24,7 +24,7 @@ $$
 h_t
 $$
 
-The execution layer is responsible for repeatedly driving this transition while preserving the required ordering and state semantics.
+The execution layer repeatedly drives this transition while preserving ordering, state semantics, and failure atomicity.
 
 ---
 
@@ -32,37 +32,39 @@ The execution layer is responsible for repeatedly driving this transition while 
 
 Seqvex is designed around sequential, temporal, non-IID, and streaming workloads.
 
-In such workloads, observations arrive over time:
+The execution hierarchy is:
 
-$$
-x_1,x_2,x_3,\ldots,x_t
-$$
+```text
+single observation
+        ↓
+streaming / online execution
+        ↓
+optional bounded micro-batching
+        ↓
+optional larger batch execution
+```
 
-The result of processing one observation may affect the processing of the next observation.
+The first two are foundational to Seqvex's semantics. Micro-batching is an optimization/capability. Larger batch execution is a secondary capability for workloads where aggregation is useful.
 
-Therefore, execution cannot be treated simply as a collection of independent function calls.
-
-The execution layer provides the mechanism for processing observations while maintaining the current committed state.
-
-Its primary responsibilities are:
+The execution layer provides mechanisms for:
 
 - driving sequential model execution;
 - preserving observation order;
-- maintaining the currently committed state;
+- maintaining committed execution state;
 - exposing single-observation execution;
-- processing streams of observations;
+- processing ordered streams;
 - supporting state reset;
-- preserving state atomicity when a transition fails.
+- preserving state atomicity when transitions fail.
 
 ---
 
 # 2. Execution vs. Model Semantics
 
-A central architectural distinction in Seqvex is:
+A central architectural distinction is:
 
 > **The model defines what computation means. The execution layer defines when and how that computation is driven.**
 
-For example, a GRU defines the mathematical transition:
+For example, a GRU defines:
 
 $$
 (x_t,h_{t-1})
@@ -72,35 +74,9 @@ $$
 
 The execution layer does not redefine the GRU equations.
 
-Instead, it invokes the model transition for each observation.
+It invokes the model transition for each observation, preserving the state relationship between calls.
 
-Conceptually:
-
-$$
-x_1
-\rightarrow
-h_1
-$$
-
-then:
-
-$$
-x_2
-\rightarrow
-h_2
-$$
-
-using the state produced by the previous transition:
-
-$$
-h_1
-\rightarrow
-h_2
-$$
-
-and so on.
-
-This separation allows different models to use the same execution semantics.
+This separation allows different sequential models to use the same foundational execution semantics.
 
 ---
 
@@ -108,19 +84,17 @@ This separation allows different models to use the same execution semantics.
 
 The execution layer operates against the `StateModel` abstraction defined in the foundation layer.
 
-Conceptually, a stateful model provides a transition:
+Conceptually:
 
 $$
 (\text{state},\text{observation})
 \rightarrow
-\text{new state}
+\text{candidate new state}
 $$
 
 The model is responsible for calculating the transition.
 
-The execution layer is responsible for driving that transition.
-
-This gives the architecture a separation similar to:
+The execution layer is responsible for driving it.
 
 ```text
 ┌─────────────────────────────┐
@@ -131,7 +105,7 @@ This gives the architecture a separation similar to:
                │
                ▼
 ┌─────────────────────────────┐
-│       StateModel             │
+│        StateModel            │
 │                             │
 │  What the transition means  │
 └──────────────┬──────────────┘
@@ -144,7 +118,7 @@ This gives the architecture a separation similar to:
 └─────────────────────────────┘
 ```
 
-The execution layer therefore does not need to know whether the underlying model is:
+The execution layer therefore does not need to know whether the model is:
 
 - a GRU;
 - another recurrent model;
@@ -153,15 +127,11 @@ The execution layer therefore does not need to know whether the underlying model
 - an RL state transition;
 - or another future sequential model.
 
-It only requires the model to satisfy the state-transition contract.
-
 ---
 
 # 4. Streaming as the Primary Execution Context
 
-Seqvex treats streaming as a first-class execution context.
-
-A stream can be represented conceptually as:
+A stream is an ordered sequence:
 
 $$
 x_1,x_2,x_3,\ldots,x_n
@@ -181,7 +151,7 @@ x_3
 x_n
 $$
 
-The corresponding state transitions are:
+with state transitions:
 
 $$
 h_0
@@ -203,9 +173,7 @@ Therefore, execution order is semantically significant.
 
 # 5. Single-Observation Execution
 
-The fundamental operation is processing one observation.
-
-Conceptually:
+The fundamental operation is processing one observation:
 
 $$
 (\text{current state},x_t)
@@ -213,12 +181,12 @@ $$
 \text{next state}
 $$
 
-In the current implementation, `StreamingExecutor::process_one` performs this role.
+In the current implementation, `StreamingExecutor::process_one` performs the reference transition path.
 
-A simplified execution sequence is:
+A simplified sequence is:
 
 ```text
-Current committed state
+current committed state
         │
         ▼
     observation
@@ -236,33 +204,13 @@ Current committed state
  committed state
 ```
 
-The important property is that the executor maintains the state between calls.
-
-For example:
-
-```rust
-executor.process_one(&observation_t)?;
-executor.process_one(&observation_t1)?;
-executor.process_one(&observation_t2)?;
-```
-
-The second call does not begin from the original state.
-
-It begins from the state successfully produced by the first call.
+The second call begins from the state successfully produced by the first call.
 
 ---
 
 # 6. Stream Execution
 
-The execution layer also supports processing a sequence of observations.
-
-Conceptually:
-
-$$
-\{x_1,x_2,\ldots,x_n\}
-$$
-
-is processed as:
+A sequence is processed as a sequential fold:
 
 $$
 h_0
@@ -276,9 +224,7 @@ h_2
 h_n
 $$
 
-This is a sequential fold over state.
-
-The important property is that the observations are **not assumed to be independent**.
+The observations are not assumed to be independent.
 
 For a stateful model:
 
@@ -300,13 +246,7 @@ depends on both the current observation and the state produced by previous obser
 
 Observation order is part of the execution semantics.
 
-Consider two observations:
-
-$$
-A,\;B
-$$
-
-Processing them as:
+For observations `A` and `B`:
 
 $$
 A\rightarrow B
@@ -320,73 +260,67 @@ $$
 
 because the state entering the second transition is different.
 
-For example:
-
-$$
-h_A=f(h_0,A)
-$$
-
-followed by:
-
-$$
-h_B=f(h_A,B)
-$$
-
-whereas reversing the observations produces:
-
-$$
-h'_B=f(h_0,B)
-$$
-
-followed by:
-
-$$
-h'_A=f(h'_B,A)
-$$
-
-In general:
-
-$$
-h_B\neq h'_A
-$$
-
-Therefore, the execution layer must preserve observation order unless an explicit execution mode defines another semantic.
+The execution layer must preserve observation order unless an explicit execution mode defines another semantic while preserving the model's required temporal contract.
 
 ---
 
 # 8. State Ownership
 
-The current `StreamingExecutor` owns the **committed execution state** associated with the execution session.
+## 8.1 Current reference topology
 
-Conceptually:
+The current `StreamingExecutor` owns the **committed execution state** for the execution session.
+
+The current implementation also holds a mutable borrow of the model:
 
 ```text
 StreamingExecutor
-├── model reference
+├── mutable model borrow
 └── committed state
 ```
 
-The model defines how a transition is calculated.
+The mutable model borrow was introduced to reach the current GRU production workspace without allocating per step.
 
-The executor maintains the state that results from successfully executing those transitions.
+**This ownership topology is provisional and under CRITICAL ARCHITECTURE REVIEW.**
 
-This allows the same model definition to potentially participate in different execution sessions with independent state.
-
-For example:
+It creates an important distinction:
 
 ```text
-Model
- ├── Executor A → state A
- └── Executor B → state B
+immutable model data / weights
+        vs.
+per-stream mutable execution scratch
 ```
 
-The execution states are therefore associated with the execution context rather than being treated as one global stream.
+A model-owned workspace is convenient for allocation-free GRU execution, but a model-owned mutable workspace can prevent multiple execution sessions from sharing the same model instance.
+
+Therefore the current topology must not be treated as the final generic execution architecture.
+
+## 8.2 Reference vs production execution
+
+The current implementation intentionally contains two paths:
+
+```text
+reference path
+    ↓
+StateModel::update / readable computation
+    ↓
+semantic reference
+
+production path
+    ↓
+model-owned reusable workspace
+    ↓
+allocation-free hot path
+```
+
+The production path is currently local to the GRU and is not a general `StateModel` redesign.
+
+Its ownership model remains experimental/provisional until additional workloads—especially classical and online ML workloads—provide evidence about the appropriate long-term relationship between model parameters, per-stream state, reusable scratch, and execution sessions.
 
 ---
 
 # 9. State Transition and Atomicity
 
-A central requirement of sequential execution is that an invalid transition must not silently corrupt the committed state.
+A stateful execution path must not silently corrupt the committed state.
 
 The intended transition is:
 
@@ -400,298 +334,203 @@ $$
 \text{commit}
 $$
 
-If validation succeeds:
-
-$$
-\boxed{
-\text{candidate state}
-\rightarrow
-\text{committed state}
-}
-$$
-
 If validation fails:
 
 $$
-\boxed{
-\text{previous valid state remains committed}
-}
+\text{previous valid state}
+\rightarrow
+\text{failure}
 $$
 
-This prevents an invalid state from becoming the input to subsequent observations.
+The previous committed state remains active.
 
-The execution layer therefore relies on the state-transition semantics established by the foundation layer.
+This applies to both the reference and optimized GRU paths.
+
+Scratch/workspace state must remain separate from committed model state so a failed computation cannot partially commit invalid results.
 
 ---
 
-# 10. Failure Semantics
+# 10. Failure Behavior
 
-Consider a sequence:
+Failure handling is part of execution semantics.
 
-$$
-x_1,x_2,x_3,x_4
-$$
+Examples include:
 
-Suppose:
+- invalid observation dimensions;
+- non-finite input;
+- invalid model parameters;
+- invalid candidate state;
+- numerical failure;
+- future device/runtime failures.
 
-$$
-x_1
-$$
+The execution layer should make the failure boundary explicit.
 
-and:
-
-$$
-x_2
-$$
-
-are processed successfully.
-
-The committed state is then:
-
-$$
-h_2
-$$
-
-Suppose processing:
-
-$$
-x_3
-$$
-
-fails.
-
-The desired state behavior is:
-
-$$
-h_2
-\rightarrow
-\boxed{\text{failed candidate}}
-\rightarrow
-h_2
-$$
-
-The invalid candidate must not become:
-
-$$
-h_3
-$$
-
-for the next successful transition.
-
-If execution continues with:
-
-$$
-x_4
-$$
-
-then the model should continue from the last valid state:
-
-$$
-h_2
-\xrightarrow{x_4}
-h_4
-$$
-
-rather than from an invalid intermediate state.
-
-This is particularly important in streaming systems because state corruption can propagate through all subsequent observations.
+A failed transition must not silently become the next committed state.
 
 ---
 
-# 11. Reset Semantics
+# 11. Reset
 
-The execution layer supports resetting the execution state.
+Reset defines an explicit boundary in the execution history.
 
 Conceptually:
 
-$$
-h_t
-\rightarrow
-h_0
-$$
-
-A reset establishes a new starting point for subsequent observations.
-
-For the current GRU implementation, the initial hidden state is the zero vector:
-
-$$
-h_0=\mathbf{0}
-$$
-
-Therefore, after reset:
-
 ```text
-previous execution history
-        │
-        ▼
-      reset
-        │
-        ▼
-initial state
-        │
-        ▼
-new sequence
+state₀
+  ↓
+x₁
+  ↓
+state₁
+  ↓
+x₂
+  ↓
+state₂
+  ↓
+reset
+  ↓
+state₀
 ```
 
-Reset is therefore a semantic operation, not merely a memory-management operation.
+For a GRU, reset currently returns the hidden state to its defined initial state.
+
+Reset semantics are separate from model computation and must remain explicit.
 
 ---
 
-# 12. Relationship to the GRU
+# 12. GRU Integration
 
-The GRU is an example of a stateful model that can be driven by the streaming execution layer.
+The GRU demonstrates the execution architecture.
 
-The GRU itself defines:
-
-$$
-(x_t,h_{t-1})
-\rightarrow
-h_t
-$$
-
-The execution layer provides the repeated application:
-
-$$
-h_0
-\xrightarrow{x_1}
-h_1
-\xrightarrow{x_2}
-h_2
-\xrightarrow{x_3}
-\cdots
-$$
-
-Therefore:
+Reference path:
 
 ```text
 StreamingExecutor
-        │
-        │ process observation
-        ▼
-      GRU
-        │
-        │ calculate transition
-        ▼
-    new hidden state
-        │
-        ▼
-StreamingExecutor
-        │
-        │ store committed state
-        ▼
-next observation
+        ↓
+StateModel::update
+        ↓
+Gru::compute
+        ↓
+new hidden state
 ```
 
-The executor does not need to understand GRU gates, matrix dimensions, activation functions, or recurrent equations.
+Production path:
 
-Those belong to the model.
+```text
+StreamingExecutor
+        ↓
+Gru::process_one_optimized
+        ↓
+Gru::update_in_place
+        ↓
+reusable GRU workspace
+        ↓
+validated state commit
+```
+
+The two paths are intended to be semantically equivalent.
+
+The production path currently eliminates steady-state allocations by reusing three hidden-dimension workspace buffers owned by `Gru`.
+
+This is a **measured local optimization**, not a decision that Seqvex will use model-owned workspaces universally.
 
 ---
 
-# 13. Execution Semantics vs. Compute Placement
+# 13. Execution vs. Compute Placement
 
-Execution semantics and compute placement are intentionally separate concepts in Seqvex.
+Execution semantics answer:
 
-Execution semantics describe **how computation progresses**:
+> **What temporal/execution operation is being performed?**
 
-- single observation;
-- streaming/online;
-- bounded micro-batch;
-- batch.
+Compute placement answers:
 
-Compute placement describes **where computation runs**:
+> **Where does that operation execute?**
 
-- CPU;
-- GPU;
-- accelerator;
-- heterogeneous execution.
-
-These dimensions should not be conflated.
-
-For example:
+Potential placement includes:
 
 ```text
-Execution:
-streaming
-
-Placement:
 CPU
-```
-
-is valid.
-
-So is:
-
-```text
-Execution:
-streaming
-
-Placement:
 GPU
+accelerator
+heterogeneous resources
 ```
 
-provided the relevant model and backend support it.
+The architecture must preserve this separation.
 
-Similarly, a batch execution mode could eventually run on a CPU or GPU.
-
-The execution layer therefore should not assume that streaming means CPU-only.
+A CPU implementation and an accelerator implementation should be able to express the same sequential/stateful semantics without forcing the execution layer to become a device-specific abstraction prematurely.
 
 ---
 
-# 14. Why This Separation Matters
+# 14. Streaming, Micro-Batching, and Batch
 
-If execution and placement are tightly coupled, introducing a new hardware backend can require redesigning the execution semantics.
+Seqvex distinguishes semantic execution from computational aggregation.
 
-Seqvex instead aims to preserve the conceptual relationship:
+### Single observation
+
+The fundamental semantic unit.
+
+### Streaming / online
+
+The primary execution context for sequential/stateful workloads.
+
+### Bounded micro-batch
+
+An optimization/capability that may improve:
+
+- SIMD/vectorization;
+- cache locality;
+- CPU parallelism;
+- accelerator utilization;
+- throughput.
+
+Micro-batching must preserve temporal and state semantics.
+
+### Larger batch
+
+A secondary capability for algorithms or workloads that benefit from larger aggregation, including historical/offline computation.
+
+It is not the conceptual foundation of Seqvex.
+
+---
+
+# 15. Automatic Execution Selection
+
+Seqvex may eventually support:
 
 ```text
-                 Execution semantics
-                        │
-             ┌──────────┼──────────┐
-             ▼          ▼          ▼
-          single     streaming    batch
-             │          │          │
-             └──────────┼──────────┘
-                        │
-                        ▼
-                 Compute placement
-                        │
-              ┌─────────┼─────────┐
-              ▼         ▼         ▼
-             CPU       GPU    accelerator
+Explicit
+    user selects execution policy
+        ↓
+    execute that policy
+
+Auto
+    user permits automatic selection
+        ↓
+    inspect relevant workload/workflow/hardware signals
+        ↓
+    select an available execution strategy
 ```
 
-This separation is architectural intent.
+A user must always be able to override Auto with an explicit policy.
 
-It does **not** imply that every combination is currently implemented.
+Potential selection signals include:
 
----
+- observation rate;
+- workload dimensionality and size;
+- temporal/state dependence;
+- latency target;
+- throughput target;
+- computational intensity;
+- memory behavior;
+- CPU/GPU/accelerator availability;
+- transfer and synchronization costs;
+- online learning versus historical replay;
+- whether micro-batching preserves the algorithm's semantics.
 
-# 15. Streaming Is Not Automatically Batching
+Automatic selection is **not implemented**.
 
-A streaming executor should not silently convert every sequence into a large batch.
+The scheduler, policy contract, heuristics, explainability, fallback behavior, and device-selection mechanism remain deferred.
 
-The semantic unit of the current execution model is one observation:
-
-$$
-x_t
-$$
-
-followed by a state transition:
-
-$$
-h_{t-1}
-\rightarrow
-h_t
-$$
-
-Future micro-batching may be introduced as an optimization or additional execution capability.
-
-However, batching must preserve the required semantics of the model and execution context.
-
-Therefore:
-
-> **Micro-batching is an optimization opportunity, not the semantic foundation of streaming execution.**
+No generic automatic scheduler should be introduced until multiple real execution strategies and workloads provide enough evidence to define a stable abstraction.
 
 ---
 
@@ -699,353 +538,152 @@ Therefore:
 
 The current execution module provides:
 
-```text
-src/execution/
-├── mod.rs
-└── streaming.rs
-```
+- stateful single-observation execution;
+- ordered stream execution;
+- committed state ownership;
+- reset;
+- failure-aware progression;
+- the generic `StateModel` reference path;
+- a provisional GRU-specific optimized path.
 
-The main execution abstraction is:
+The current `StreamingExecutor` API uses `&mut M` because the present GRU production workspace is model-owned.
 
-```text
-StreamingExecutor
-```
+That signature is **not a settled architecture**.
 
-It maintains:
-
-```text
-StreamingExecutor
-├── model reference
-└── committed state
-```
-
-The current interface supports the conceptual operations:
+A future design may instead separate:
 
 ```text
-process_one
-process_stream
-reset
+model parameters / immutable computation
+        +
+per-stream state
+        +
+per-stream reusable workspace
 ```
 
-### `process_one`
-
-Processes one observation using the current committed state.
-
-Conceptually:
-
-$$
-(h_{t-1},x_t)
-\rightarrow
-h_t
-$$
-
-### `process_stream`
-
-Processes observations sequentially while carrying state from one successful transition to the next.
-
-Conceptually:
-
-$$
-h_0
-\xrightarrow{x_1}
-h_1
-\xrightarrow{x_2}
-\cdots
-\xrightarrow{x_n}
-h_n
-$$
-
-### `reset`
-
-Restores the executor to its initial execution state.
+or establish another ownership topology once real workloads demonstrate the requirement.
 
 ---
 
-# 17. What the Execution Layer Does Not Own
+# 17. Performance Considerations
 
-The execution layer does **not** own:
+Execution performance may be affected by:
 
-- GRU equations;
-- neural-network architecture;
-- model parameters;
-- loss functions;
-- optimizers;
-- training algorithms;
-- feature engineering;
-- data ingestion;
-- database operations;
-- visualization;
-- business/domain logic;
-- exchange or market-data protocols;
-- GPU kernel implementation.
+- allocations;
+- state copies;
+- data layout;
+- cache locality;
+- SIMD;
+- synchronization;
+- dispatch;
+- memory bandwidth;
+- CPU/GPU transfers;
+- accelerator launch overhead;
+- batching strategy.
 
-Those concerns belong elsewhere in the system.
-
-The execution layer should remain focused on execution semantics.
-
----
-
-# 18. Data Ingestion Is Separate
-
-A stream of observations may originate from many sources:
+The correct optimization sequence is:
 
 ```text
-sensor
-market data
-file
-network
-simulation
-database
-application
-```
-
-The execution layer does not need to own those sources.
-
-Conceptually:
-
-```text
-Data Source
-    │
-    ▼
-Observation
-    │
-    ▼
-Execution Layer
-    │
-    ▼
-StateModel
-    │
-    ▼
-New State
-```
-
-This separation allows Seqvex models to operate on observations produced by external systems without making the ML framework responsible for the external system itself.
-
----
-
-# 19. Testing
-
-Execution behavior should be tested independently from individual model mathematics.
-
-Important execution tests include:
-
-### Sequential state progression
-
-Verify that state from one successful observation becomes the input state for the next.
-
-### Observation ordering
-
-Verify that observations are processed in the supplied order.
-
-### Failure preservation
-
-Verify that a failed transition does not replace the last valid committed state.
-
-### Stream behavior
-
-Verify that processing a stream produces the same sequential state progression as processing the observations individually.
-
-### Reset behavior
-
-Verify that reset removes the previous execution history and restores the expected initial state.
-
-### Model integration
-
-Verify that a real stateful model, such as the GRU, can execute correctly through the execution layer.
-
-These tests establish the semantics of execution independently from performance optimization.
-
----
-
-# 20. Performance Considerations
-
-The execution layer is intentionally thin.
-
-A streaming execution loop should avoid introducing unnecessary work around the model's actual computation.
-
-For a sequence:
-
-$$
-x_1,x_2,\ldots,x_n
-$$
-
-the executor should ideally perform approximately:
-
-```text
-observation
+correctness
     ↓
-state transition
+benchmark
     ↓
-commit
+profile
     ↓
-next observation
+identify bottleneck
+    ↓
+optimize
+    ↓
+benchmark again
 ```
 
-without unnecessary intermediate abstraction layers in the hot path.
-
-However, optimization should be measurement-driven.
-
-Potential future areas include:
-
-- reducing temporary allocations;
-- avoiding unnecessary state copies;
-- reducing synchronization;
-- minimizing dispatch overhead;
-- improving memory locality;
-- supporting bounded micro-batching;
-- specialized CPU execution;
-- accelerator execution.
-
-These should be introduced only when profiling demonstrates that they materially affect performance.
+The current GRU workspace optimization demonstrates allocation elimination and a measured small-dimension streaming benefit. It should not be generalized beyond the evidence.
 
 ---
 
-# 21. Determinism and Reproducibility
+# 18. Testing
 
-For a deterministic model and deterministic sequence of observations, execution should produce reproducible state progression under equivalent numerical conditions.
+Execution tests should protect:
 
-Conceptually:
+- observation ordering;
+- state progression;
+- reset semantics;
+- failure atomicity;
+- repeated streaming behavior;
+- reference/production equivalence;
+- deterministic behavior where promised;
+- bounded micro-batch semantics when implemented.
 
-$$
-(x_1,x_2,\ldots,x_n)
-\rightarrow
-h_n
-$$
+Performance tests should separately report:
 
-should produce the same result when the same initial state, parameters, and numerical execution conditions are used.
+- latency;
+- throughput;
+- allocations;
+- bytes allocated;
+- memory footprint;
+- relevant variance/noise.
 
-This property is important for:
-
-- testing;
-- debugging;
-- reference implementations;
-- benchmark comparisons;
-- validating optimized implementations.
-
-Hardware-specific floating-point behavior may introduce small numerical differences when execution is moved to different backends.
-
-Such differences should be measured and handled with explicitly defined numerical tolerances rather than assumed to be identical.
+A performance optimization is not considered universally beneficial merely because one benchmark improves.
 
 ---
 
-# 22. Current Scope
+# 19. Current Scope
 
-The current execution subsystem establishes the first streaming execution path for Seqvex.
-
-Currently supported:
+Current scope includes:
 
 - stateful single-observation execution;
-- sequential stream processing;
+- sequential stream execution;
 - explicit state ownership;
 - reset;
-- failure-aware state progression;
-- integration with `StateModel`;
-- CPU execution through the current model implementations.
+- failure-aware progression;
+- `StateModel`;
+- CPU execution;
+- a provisional GRU production hot path.
 
-The execution layer is intentionally small because its current purpose is to establish correct execution semantics before adding more advanced execution mechanisms.
+Current scope does **not** imply a final generic workspace, scheduler, GPU backend, automatic execution policy, or universal zero-allocation guarantee.
 
 ---
 
-# 23. Deferred Capabilities
+# 20. Deferred Capabilities
 
-The following are intentionally not assumed to be part of the current implementation:
+The following remain deferred until demonstrated requirements justify them:
 
-- bounded micro-batching;
+- bounded micro-batch execution as a generalized API;
 - general batch execution;
 - asynchronous execution;
-- task scheduling;
-- thread pools;
-- distributed execution;
-- GPU scheduling;
-- accelerator scheduling;
+- execution scheduling;
+- automatic execution selection;
+- GPU/accelerator scheduling;
 - graph execution;
 - pipeline parallelism;
 - automatic synchronization;
-- zero-copy device transfer;
-- heterogeneous execution policies.
-
-These may become relevant as concrete requirements emerge.
-
-They should not be added merely because they are common features in other ML frameworks.
+- zero-copy policies;
+- generalized heterogeneous-memory policies;
+- generic reusable workspace infrastructure.
 
 ---
 
-# 24. Architectural Principle
+# 21. Architectural Guard
 
-The execution layer follows a simple principle:
+Any implementation, optimization, or API change that could materially constrain:
 
-> **Execution determines when and how a model transition is driven; the model determines what the transition means.**
+- heterogeneous memory/device placement;
+- accelerator offload;
+- hardware-aware execution;
+- per-stream versus model-owned state/scratch;
+- Rust-native low-level optimization;
 
-For sequential execution, the essential state transition is:
+must undergo **CRITICAL ARCHITECTURE REVIEW before implementation**.
 
-$$
-\boxed{
-(\text{current state},\text{observation})
-\rightarrow
-\text{candidate state}
-\rightarrow
-\text{validated committed state}
-}
-$$
-
-Repeated over a sequence:
-
-$$
-\boxed{
-h_0
-\xrightarrow{x_1}
-h_1
-\xrightarrow{x_2}
-h_2
-\xrightarrow{x_3}
-\cdots
-\xrightarrow{x_n}
-h_n
-}
-$$
-
-This is the foundation of Seqvex's streaming execution model.
-
-The execution layer should remain simple enough that this semantic relationship is easy to understand, test, and eventually optimize.
+The current `StreamingExecutor<'_, M>` mutable model borrow is an active example of this guard.
 
 ---
 
-# 25. Summary
+# 22. Relationship to Other Documentation
 
-The Seqvex execution layer provides the machinery required to run stateful models over sequential observations.
+- `ARCHITECTURE.md` — system-wide architectural reasoning.
+- `docs/DEVELOPMENT.md` — canonical human/AI development contract.
+- `src/foundation/state/README.md` — state-transition and failure semantics.
+- `src/foundation/observation/README.md` — observation and ordering semantics.
+- `src/models/recurrent/README.md` — GRU mathematics, implementation, and reference/production distinction.
 
-Its responsibilities are deliberately narrow:
-
-1. accept observations;
-2. preserve their order;
-3. invoke the model transition;
-4. maintain the committed state;
-5. preserve state validity across failures;
-6. support reset;
-7. provide a foundation for future execution strategies.
-
-The central abstraction is:
-
-$$
-(\text{state},\text{observation})
-\rightarrow
-\text{new state}
-$$
-
-The execution layer does not define the mathematics of the model.
-
-Instead, it provides the controlled environment in which those mathematical transitions can be repeatedly executed over a sequence.
-
-This separation is fundamental to Seqvex's architecture:
-
-$$
-\boxed{
-\text{Execution semantics}
-\neq
-\text{Model semantics}
-\neq
-\text{Compute placement}
-}
-$$
-
-Keeping these concerns separate allows Seqvex to evolve from its current CPU streaming reference implementation toward more advanced execution and hardware capabilities without prematurely coupling those concerns together.
+> **The execution layer coordinates stateful computation; it should not silently become the owner of every future runtime abstraction.**
