@@ -129,8 +129,17 @@ Likely areas include online estimators, incremental learning,
 rolling/expanding statistics, temporal validation, stateful training loops,
 bounded micro-batch learning, and model update lifecycle.
 
+### Planned concrete slice
+
+The first concrete online estimator is **Recursive Least Squares (RLS)** —
+ordered updates of adaptive `(w, P)` state with atomic commit and
+numerical-stability handling (Issue #26). RLS is deliberately scheduled last:
+it is the strongest evidence source for per-stream adaptive state and for
+committing two coupled state components together.
+
 Exact algorithms, traits, crate boundaries, and runtime architecture remain
-open.
+open. The slice sequence and the evidence each algorithm is expected to supply
+are recorded in `docs/ML_VERTICAL_SLICES.md`.
 
 ## Phase 3 — Core ML Algorithms
 
@@ -143,8 +152,19 @@ Potential areas include supervised learning, unsupervised learning,
 sequential/temporal models, representation learning, and incremental
 variants where justified.
 
+### Planned concrete slices
+
+The first classic-ML slices are **Linear Regression** (closed-form prediction;
+Issue #23), **Decision Tree** (read-only traversal; Issue #24), and
+**K-Nearest Neighbors** (brute-force query; Issue #25). They are intended to
+establish the simplest ownership topology — immutable, shareable model data
+with no model-owned scratch — and the first micro-batch pattern for independent
+observations. Bounded micro-batch over the existing GRU **reference** path
+(Issue #22) follows.
+
 Algorithm selection should follow actual Seqvex use cases and experiments,
-not an attempt to reproduce every conventional ML library.
+not an attempt to reproduce every conventional ML library. The development
+sequence and per-slice evidence are recorded in `docs/ML_VERTICAL_SLICES.md`.
 
 ## Phase 4 — Reinforcement Learning
 
