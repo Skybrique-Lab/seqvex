@@ -20,10 +20,17 @@ fn params() -> GruParameters {
     GruParameters::deterministic(2, 2)
 }
 
+fn assert_bitwise_eq(actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len(), "length mismatch");
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        assert_eq!(actual.to_bits(), expected.to_bits(), "index {index}");
+    }
+}
+
 #[test]
 fn executor_drives_a_non_gru_model() {
-    let model = SumModel::new(100);
-    let mut executor = StreamingExecutor::new(&model, 0_i64);
+    let mut model = SumModel::new(100);
+    let mut executor = StreamingExecutor::new(&mut model, 0_i64);
     executor.process_one(&Observation::new(3)).unwrap();
     executor.process_one(&Observation::new(4)).unwrap();
     assert_eq!(*executor.state(), 7);
@@ -31,9 +38,9 @@ fn executor_drives_a_non_gru_model() {
 
 #[test]
 fn streaming_execution_matches_direct_stepping() {
-    let model = Gru::new(2, 2, params()).unwrap();
+    let mut model = Gru::new(2, 2, params()).unwrap();
     let mut reference = Gru::new(2, 2, params()).unwrap();
-    let mut executor = StreamingExecutor::new(&model, Vector::zeros(2));
+    let mut executor = StreamingExecutor::new(&mut model, Vector::zeros(2));
 
     for input in [[0.1, 0.2], [0.3, -0.4], [-0.5, 0.6]] {
         let observation = observation(&input);
@@ -45,8 +52,8 @@ fn streaming_execution_matches_direct_stepping() {
 
 #[test]
 fn failed_update_preserves_state_and_the_stream_continues() {
-    let model = Gru::new(2, 2, params()).unwrap();
-    let mut executor = StreamingExecutor::new(&model, Vector::zeros(2));
+    let mut model = Gru::new(2, 2, params()).unwrap();
+    let mut executor = StreamingExecutor::new(&mut model, Vector::zeros(2));
     executor.process_one(&observation(&[0.1, 0.2])).unwrap();
     let committed = executor.state().clone();
 
@@ -68,8 +75,8 @@ fn failed_update_preserves_state_and_the_stream_continues() {
 
 #[test]
 fn process_stream_reports_failures_without_stopping() {
-    let model = Gru::new(2, 2, params()).unwrap();
-    let mut executor = StreamingExecutor::new(&model, Vector::zeros(2));
+    let mut model = Gru::new(2, 2, params()).unwrap();
+    let mut executor = StreamingExecutor::new(&mut model, Vector::zeros(2));
     let mut failures = 0;
 
     let final_state = executor
@@ -95,8 +102,8 @@ fn process_stream_reports_failures_without_stopping() {
 
 #[test]
 fn reset_starts_a_new_sequence_at_the_execution_layer() {
-    let model = Gru::new(2, 2, params()).unwrap();
-    let mut executor = StreamingExecutor::new(&model, Vector::zeros(2));
+    let mut model = Gru::new(2, 2, params()).unwrap();
+    let mut executor = StreamingExecutor::new(&mut model, Vector::zeros(2));
     executor.process_one(&observation(&[0.1, 0.2])).unwrap();
     executor.reset(Vector::zeros(2));
     executor.process_one(&observation(&[0.3, -0.4])).unwrap();
@@ -104,4 +111,64 @@ fn reset_starts_a_new_sequence_at_the_execution_layer() {
     let mut fresh = Gru::new(2, 2, params()).unwrap();
     fresh.step(&observation(&[0.3, -0.4])).unwrap();
     assert_eq!(executor.state(), fresh.hidden());
+}
+
+#[test]
+fn optimized_streaming_matches_reference_streaming_bit_for_bit() {
+    let mut reference_model = Gru::new(2, 2, params()).unwrap();
+    let mut production_model = Gru::new(2, 2, params()).unwrap();
+    let mut reference = StreamingExecutor::new(&mut reference_model, Vector::zeros(2));
+    let mut production = StreamingExecutor::new(&mut production_model, Vector::zeros(2));
+
+    for input in [
+        [0.1, 0.2],
+        [0.3, -0.4],
+        [-0.5, 0.6],
+        [0.0, 0.9],
+        [0.7, -0.2],
+    ] {
+        let observation = observation(&input);
+        reference.process_one(&observation).unwrap();
+        production.process_one_optimized(&observation).unwrap();
+        assert_bitwise_eq(production.state().as_slice(), reference.state().as_slice());
+    }
+
+    // Reset both and confirm the optimized path continues identically.
+    reference.reset(Vector::zeros(2));
+    production.reset(Vector::zeros(2));
+    for input in [[0.2, -0.7], [-0.4, 0.5]] {
+        let observation = observation(&input);
+        reference.process_one(&observation).unwrap();
+        production.process_one_optimized(&observation).unwrap();
+        assert_bitwise_eq(production.state().as_slice(), reference.state().as_slice());
+    }
+}
+
+#[test]
+fn optimized_streaming_preserves_state_after_failure() {
+    let mut model = Gru::new(2, 2, params()).unwrap();
+    let mut executor = StreamingExecutor::new(&mut model, Vector::zeros(2));
+    executor
+        .process_one_optimized(&observation(&[0.1, 0.2]))
+        .unwrap();
+    let committed = executor.state().clone();
+
+    assert_eq!(
+        executor
+            .process_one_optimized(&observation(&[f32::NAN, 0.0]))
+            .unwrap_err(),
+        GruError::NonFiniteInput
+    );
+    assert_eq!(executor.state(), &committed);
+
+    // The next valid observation continues from the committed state and matches
+    // the reference streaming path.
+    let mut reference_model = Gru::new(2, 2, params()).unwrap();
+    let mut reference = StreamingExecutor::new(&mut reference_model, Vector::zeros(2));
+    reference.process_one(&observation(&[0.1, 0.2])).unwrap();
+    reference.process_one(&observation(&[0.4, -0.1])).unwrap();
+    executor
+        .process_one_optimized(&observation(&[0.4, -0.1]))
+        .unwrap();
+    assert_bitwise_eq(executor.state().as_slice(), reference.state().as_slice());
 }
