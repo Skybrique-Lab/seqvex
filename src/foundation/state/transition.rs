@@ -1,4 +1,5 @@
-//! State transition contract and single / bounded micro-batch execution.
+//! State transition contract, single-observation execution, and the reference
+//! ordered fold.
 //!
 //! The transition mechanism here is deliberately provisional. A candidate next
 //! state is represented as a returned value rather than by mutating the current
@@ -48,16 +49,19 @@ pub struct BatchFailure<S, E> {
     pub error: E,
 }
 
-/// Bounded micro-batch execution.
+/// Reference ordered-fold execution.
 ///
-/// The batch is applied in observation order. Execution granularity may change
-/// for efficiency, but stream and state semantics must not. On success the
-/// committed state is returned; on failure the last committed valid state is
-/// returned with the failure so it remains identifiable.
+/// This is an **unbounded** sequential fold over `batch`, not a bounded
+/// micro-batch strategy: it consumes whatever the iterator yields and stops at
+/// the first failure. The batch is applied in observation order; stream and
+/// state semantics are preserved. On success the committed state is returned;
+/// on failure the last committed valid state is returned with the failure so it
+/// remains identifiable.
 ///
 /// ponytail: this is an ordered sequential fold, not a vectorized
 /// implementation. It is the reference semantic any future vectorized or
-/// hardware-accelerated micro-batch path must preserve.
+/// hardware-accelerated micro-batch path must preserve. A bounded micro-batch
+/// is introduced per algorithm (`docs/ML_VERTICAL_SLICES.md`).
 pub fn process_batch<M, I>(
     model: &M,
     state: M::State,

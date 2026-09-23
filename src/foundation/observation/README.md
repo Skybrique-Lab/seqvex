@@ -17,6 +17,14 @@ Observation is the smallest semantic unit of the streaming-first execution
 model: a stream is an ordered sequence of observations, and single-observation
 execution is the smallest execution unit. See `ARCHITECTURE.md`.
 
+## Ordering invariant
+
+Observation order is part of the execution semantics. Micro-batching or any
+other aggregation must not reorder observations unless the algorithm is
+demonstrably order-independent, and even then only when the resulting
+computation is unchanged. When an observation carries a `SequenceNumber`, that
+ordering context is authoritative. See `docs/ML_VERTICAL_SLICES.md`.
+
 ## Inside
 
 - `Observation<T>` — an input value with optional sequence context.

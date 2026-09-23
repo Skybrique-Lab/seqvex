@@ -10,7 +10,9 @@ transitions, and failure atomicity.
 - `StateModel` — the transition contract: current valid state + observation →
   candidate next state, or a classified failure.
 - Single-observation execution (`process_one`).
-- Bounded micro-batch execution (`process_batch`).
+- Reference ordered-fold execution (`process_batch`): unbounded and
+  stop-on-first-failure. This is **not** a bounded micro-batch strategy; a
+  bounded micro-batch is introduced per algorithm (`docs/ML_VERTICAL_SLICES.md`).
 - Streaming execution with failure preservation (`process_stream`).
 
 ## Relationship to Seqvex
@@ -22,7 +24,8 @@ subsequent observations. See `docs/DEVELOPMENT.md` §3.3/§10 and
 
 ## Inside
 
-- `transition` — the `StateModel` contract and single/micro-batch execution.
+- `transition` — the `StateModel` contract, single-observation execution, and
+  the reference ordered fold.
 - `atomicity` — streaming replay that preserves the last valid state and
   reports failures.
 

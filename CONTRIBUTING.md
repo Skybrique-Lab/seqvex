@@ -208,6 +208,7 @@ hierarchy.
 The current area labels are:
 
 - `area::benchmark` — `/benches`
+- `area::execution` — `src/execution`
 - `area::numerical` — `src/foundation/numerical`
 - `area::observation` — `src/foundation/observation`
 - `area::ordering` — `src/foundation/ordering`
@@ -275,7 +276,9 @@ Area or Nature classification.
 The current milestones are:
 
 - **Phase 1 — Foundations**
-- **First Sequential ML Slice**
+- **Sequential ML Slice — Recurrent Neural Network**
+- **Sequential ML Slice — Classic ML**
+- **Sequential ML Slice — Online ML**
 
 Do not create a new milestone without first discussing and approving it.
 

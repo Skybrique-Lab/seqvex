@@ -6,7 +6,10 @@
 //! execution, and a stateful GRU (`models::recurrent::gru`).
 //!
 //! The GRU is the slice's first model, not the framework's model abstraction;
-//! hardware placement and storage design remain deliberately out of scope.
+//! `models::classic` adds the first classic-ML slice, linear-regression
+//! prediction, and `models::online` adds the first ordered online-adaptation
+//! slice, recursive least squares. Hardware placement and storage design remain
+//! deliberately out of scope; see `docs/ML_VERTICAL_SLICES.md`.
 //!
 //! The canonical development contract is `docs/DEVELOPMENT.md`.
 

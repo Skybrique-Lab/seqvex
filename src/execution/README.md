@@ -484,6 +484,13 @@ An optimization/capability that may improve:
 
 Micro-batching must preserve temporal and state semantics.
 
+There is currently **no generic micro-batch executor**, and one is not
+introduced until several algorithms demonstrate a recurring need. The
+foundation's `process_batch` is **reference ordered-fold semantics** — an
+unbounded, stop-on-first-failure fold — not a bounded micro-batch
+implementation. A bounded micro-batch is introduced per algorithm, only where
+that algorithm's semantics permit it (`docs/ML_VERTICAL_SLICES.md`).
+
 ### Larger batch
 
 A secondary capability for algorithms or workloads that benefit from larger aggregation, including historical/offline computation.

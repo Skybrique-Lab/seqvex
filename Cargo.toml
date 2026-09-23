@@ -19,3 +19,11 @@ harness = false
 [[bench]]
 name = "gru"
 harness = false
+
+[[bench]]
+name = "linear_regression"
+harness = false
+
+[[bench]]
+name = "rls"
+harness = false

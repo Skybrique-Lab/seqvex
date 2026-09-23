@@ -246,6 +246,12 @@ It must not silently violate:
 
 The buffering policy, batch size, scheduler, and automatic batching heuristics remain undecided.
 
+Today bounded micro-batching has only **reference fold semantics**
+(`process_batch` in `src/foundation/state`): an unbounded,
+stop-on-first-failure ordered fold, not a bounded micro-batch executor. There is
+no generic micro-batch API or executor, and none is added until the vertical
+slices demonstrate a recurring need (`docs/ML_VERTICAL_SLICES.md`).
+
 ### 6.4 Larger batch operations
 
 Some algorithms legitimately need large-scale batch computation.
@@ -716,7 +722,7 @@ measured optimization
 
 A production path must preserve the reference path's observable semantics.
 
-The GRU allocation-free execution path is an example of this principle: its reusable workspace is currently local to the GRU and remains provisional while the long-term ownership relationship between model state, per-stream state, and reusable scratch is under architecture review.
+The GRU allocation-free execution path is an example of this principle: its reusable workspace is currently local to the GRU and remains **provisional**. Because reaching that model-owned workspace required the generic `StreamingExecutor<'m, M>` to hold `&'m mut M`, the executor's ownership and the model-owned workspace are under **CRITICAL ARCHITECTURE REVIEW** (`docs/DEVELOPMENT.md` §3): they couple immutable, shareable weights with per-stream mutable scratch and prevent several executors from sharing one model. The long-term ownership relationship between model state, per-stream state, and reusable scratch remains deliberately open. Do not treat the current `&mut M` signature or model-owned workspace as settled, and do not propagate that topology to other models.
 
 ## 23. Architectural principles
 
