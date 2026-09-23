@@ -137,6 +137,13 @@ fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
     }
 }
 
+fn assert_bitwise_eq(actual: &[f32], expected: &[f32]) {
+    assert_eq!(actual.len(), expected.len(), "length mismatch");
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        assert_eq!(actual.to_bits(), expected.to_bits(), "index {index}");
+    }
+}
+
 // --- construction -----------------------------------------------------------
 
 #[test]
@@ -353,4 +360,107 @@ fn deterministic_parameters_are_reproducible() {
     left.step(&observation(&[0.4, 0.6])).unwrap();
     right.step(&observation(&[0.4, 0.6])).unwrap();
     assert_eq!(left.hidden(), right.hidden());
+}
+
+// --- production path equivalence --------------------------------------------
+
+#[test]
+fn production_step_matches_reference_over_long_sequence() {
+    let mut reference = Gru::new(8, 16, GruParameters::deterministic(8, 16)).unwrap();
+    let mut production = Gru::new(8, 16, GruParameters::deterministic(8, 16)).unwrap();
+
+    for step in 0..500 {
+        let input = Vector::from_fn(8, |i| ((step as f32) * 0.13 + (i as f32) * 0.07).sin());
+        let observation = Observation::new(input);
+        reference.step(&observation).unwrap();
+        production.step_in_place(&observation).unwrap();
+        assert_bitwise_eq(
+            production.hidden().as_slice(),
+            reference.hidden().as_slice(),
+        );
+
+        if step == 250 {
+            reference.reset();
+            production.reset();
+            assert_bitwise_eq(
+                production.hidden().as_slice(),
+                reference.hidden().as_slice(),
+            );
+        }
+    }
+}
+
+#[test]
+fn production_update_in_place_matches_update_bit_for_bit() {
+    let reference = sample_params();
+    let mut model = Gru::new(2, 2, to_parameters(&reference)).unwrap();
+    let mut update_state = Vector::zeros(2);
+    let mut in_place_state = Vector::zeros(2);
+
+    for step in 0..64 {
+        let input = vec![(step as f32 * 0.23).sin(), (step as f32 * 0.07).cos()];
+        let observation = observation(&input);
+        update_state = model.update(&update_state, &observation).unwrap();
+        model
+            .update_in_place(&mut in_place_state, &observation)
+            .unwrap();
+        assert_bitwise_eq(in_place_state.as_slice(), update_state.as_slice());
+    }
+}
+
+#[test]
+fn production_step_rejects_non_finite_input_and_preserves_state() {
+    let reference = sample_params();
+    let mut model = Gru::new(2, 2, to_parameters(&reference)).unwrap();
+    model.step_in_place(&observation(&[0.5, -0.5])).unwrap();
+    let committed = model.hidden().clone();
+
+    assert_eq!(
+        model
+            .step_in_place(&observation(&[f32::NAN, 0.0]))
+            .unwrap_err(),
+        GruError::NonFiniteInput
+    );
+    assert_bitwise_eq(model.hidden().as_slice(), committed.as_slice());
+}
+
+#[test]
+fn production_step_rejects_wrong_input_length_and_preserves_state() {
+    let reference = sample_params();
+    let mut model = Gru::new(2, 2, to_parameters(&reference)).unwrap();
+    model.step_in_place(&observation(&[0.5, -0.5])).unwrap();
+    let committed = model.hidden().clone();
+
+    assert_eq!(
+        model.step_in_place(&observation(&[1.0])).unwrap_err(),
+        GruError::DimensionMismatch {
+            expected: 2,
+            actual: 1,
+        }
+    );
+    assert_bitwise_eq(model.hidden().as_slice(), committed.as_slice());
+}
+
+#[test]
+fn production_step_rejects_non_finite_candidate_and_preserves_state() {
+    let parameters = GruParameters {
+        w_z: Matrix::from_rows(&[&[f32::MAX, f32::MAX]]).unwrap(),
+        u_z: Matrix::from_rows(&[&[0.0]]).unwrap(),
+        b_z: Vector::zeros(1),
+        w_r: Matrix::from_rows(&[&[0.0, 0.0]]).unwrap(),
+        u_r: Matrix::from_rows(&[&[0.0]]).unwrap(),
+        b_r: Vector::zeros(1),
+        w_h: Matrix::from_rows(&[&[0.0, 0.0]]).unwrap(),
+        u_h: Matrix::from_rows(&[&[0.0]]).unwrap(),
+        b_h: Vector::zeros(1),
+    };
+    let mut model = Gru::new(2, 1, parameters).unwrap();
+
+    assert_eq!(
+        model
+            .step_in_place(&observation(&[f32::MAX, -f32::MAX]))
+            .unwrap_err(),
+        GruError::NonFiniteCandidate
+    );
+    assert_bitwise_eq(model.hidden().as_slice(), &[0.0]);
 }
