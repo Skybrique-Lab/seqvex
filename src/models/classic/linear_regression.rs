@@ -33,6 +33,26 @@
 //! prediction consumes the same [`Observation<Vector>`] the rest of the
 //! framework uses. No `f64` conversion or new numerical primitive is added
 //! without a measured requirement.
+//!
+//! ## Operating envelope and caller responsibility
+//!
+//! Construction rejects non-finite weights and bias
+//! ([`RegressionError::NonFiniteParameter`]). Prediction validates the feature
+//! dimension first, then feature finiteness ([`RegressionError::NonFiniteInput`]).
+//! Prediction does **not** validate its output.
+//!
+//! Because the substrate is `f32`, finite operands can still overflow during
+//! multiplication or summation and produce `±inf`; a subsequent `inf + (-inf)`
+//! can produce `NaN`. Finite parameters and finite inputs therefore do **not**
+//! guarantee a finite prediction. The caller is responsible for keeping the
+//! products and sums representable, for example by scaling features and
+//! coefficients.
+//!
+//! This is expected IEEE-754 `f32` behaviour, not a defect, and no numeric
+//! cutoff is imposed or implied: Seqvex does not invent a magnitude threshold
+//! beyond which input is rejected. The analogous pure-prediction path
+//! `Rls::predict` also computes `wᵀx` without an output-finiteness check; each
+//! model documents its own envelope rather than sharing a rule or abstraction.
 
 use crate::foundation::numerical::{DimensionMismatch, Vector};
 use crate::foundation::observation::Observation;
