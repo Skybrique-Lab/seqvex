@@ -27,3 +27,7 @@ harness = false
 [[bench]]
 name = "rls"
 harness = false
+
+[[bench]]
+name = "decision_tree"
+harness = false

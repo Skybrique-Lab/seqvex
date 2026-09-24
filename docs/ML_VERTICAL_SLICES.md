@@ -59,7 +59,7 @@ this matrix does not create or close Issues.
 | Algorithm | Issue | Goal | State profile | Workspace / scratch | Execution strategy | Status |
 |---|---|---|---|---|---|---|
 | **Linear Regression** | #23 | Closed-form prediction `ŷ = w · x + b`; prediction only | None during prediction (immutable weights) | None | Streaming per-observation; independent observations may micro-batch | Implemented (reference/streaming/micro-batch) |
-| **Decision Tree** | #24 | Read-only traversal from a trained tree | None (immutable at inference) | None, or a small traversal path | Streaming per-observation traversal; independent observations may micro-batch | Planned |
+| **Decision Tree** | #24 | Read-only traversal from a trained tree | None (immutable at inference) | None, or a small traversal path | Streaming per-observation traversal; independent observations may micro-batch | Implemented (reference/streaming/micro-batch; regression only, classification deferred) |
 | **K-Nearest Neighbors** | #25 | Brute-force distance + neighbor selection | Stored reference observations + `k` | Per-query distance scratch `O(N)`; neighbor set `O(k)` | Streaming per-query; independent queries may micro-batch | Planned |
 | **GRU bounded micro-batch** | #22 | Bounded, ordered micro-batch over existing GRU semantics | Hidden state `h` per stream | Reference path only; do not touch the model-owned workspace | Ordered fold; **not** independent; unchanged failure semantics | Planned (reference path only) |
 | **Recursive Least Squares** | #26 | Ordered online adaptation of `(w, P)` | Adaptive `w` and covariance `P` per stream | `d`-vectors and `d×d` rank-1 update scratch | Ordered, state-dependent; **not** independent | Implemented (reference/streaming/bounded fold) |
@@ -149,6 +149,23 @@ largest tested feature dimension it is materially slower (median +4.8 ns/obs,
 ≈ 16× the single-observation IQR). No optimization was justified. The
 micro-batch is retained as a semantically-valid capability and as a pattern for
 future independent algorithms, not as a performance claim.
+
+### Decision Tree (#24)
+
+Read-only regression traversal; classification and training remain deferred.
+Reference and streaming inference allocate nothing (`0.000` allocations, `0`
+bytes per observation). The measured streaming median differed from the direct
+reference by +0.6 ns/obs at a 127-node tree (15.9 vs 15.3 ns/obs) and by
+-1.7 ns/obs at the largest tested 2047-node tree (106.7 vs 108.4 ns/obs); the
+benchmark applies no materiality test, so these are reported measured
+differences, not a statistical-equivalence claim. The bounded micro-batch adds
+exactly one output `Vec` per batch (amortized `1/batch_size` per observation) and
+is not faster than single-observation prediction; a first-element failure makes
+the entire `predict_batch` call return `Err`, with no partial output vector
+returned. Construction builds one growing node `Vec` (11, 14, and 16 heap
+allocations at the measured tree sizes), distinct from the allocation-free
+per-observation inference and the per-batch output allocation. No optimization
+was implemented; there is no profile-identified bottleneck.
 
 ### Recursive Least Squares (#26)
 
