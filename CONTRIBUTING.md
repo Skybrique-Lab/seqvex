@@ -483,6 +483,82 @@ The key rule is:
 > **New objective → new Issue.**  
 > **Closed but same objective remains incomplete → reopen.**
 
+### Parent Feature Branch and Sub-Issue Commit Traceability
+
+When a parent Issue contains multiple native sub-issues, the parent objective should normally be implemented through **one feature branch for the parent objective**.
+
+```text
+Parent Issue
+    │
+    ├── Native Sub-Issue A
+    ├── Native Sub-Issue B
+    └── Native Sub-Issue C
+             │
+             ▼
+      Parent feature branch
+             │
+             ├── commit → #A
+             ├── commit → #A
+             ├── commit → #B
+             └── commit → #C
+```
+
+The branch represents the overall parent objective. The commit reference identifies the specific sub-issue whose work the commit primarily addresses.
+
+For example:
+
+```bash
+git commit -m "perf: implement reusable GRU workspace — #33"
+git commit -m "test: validate workspace allocation behavior — #33"
+git commit -m "feat: establish bounded GRU micro-batch execution — #34"
+```
+
+A commit may reference multiple Issues/sub-issues when the change genuinely spans them. Do not split a logically single change merely to manufacture separate references.
+
+The branch name should normally identify the parent objective:
+
+```text
+issue-17-gru-production-inference
+```
+
+This differs from the commit's Issue reference. The branch provides parent-level implementation context; the commit provides workstream-level traceability.
+
+### Native Sub-Issue Rule
+
+A sub-issue must be a genuine child/workstream of its parent, not merely an Issue that mentions the parent in its description.
+
+Before converting or attaching an existing Issue as a sub-issue:
+
+1. inspect the proposed parent;
+2. verify that the candidate represents a meaningful category/workstream required by the parent objective;
+3. confirm that it is not an independent Seqvex capability or objective;
+4. only then establish the native GitHub parent/sub-issue relationship.
+
+An existing standalone Issue may be attached to the parent through GitHub's native **Sub-issues → Add existing issue** mechanism. A textual `Parent #XX` reference in the Issue body is not itself a native parent/sub-issue relationship.
+
+### Duplicate Replacement Rule
+
+When an existing standalone Issue is determined to be a child by nature:
+
+1. verify the supposed parent Issue first;
+2. establish the replacement as a **native sub-issue** under that parent;
+3. transfer the necessary scope, acceptance criteria, dependencies, evidence, and relevant history;
+4. explicitly state in the replacement sub-issue that it replaces the original standalone Issue;
+5. return to the original Issue;
+6. add the `duplicate` label;
+7. add a closing comment identifying the replacement;
+8. close the original Issue as a duplicate.
+
+Do not close the original duplicate before the replacement native sub-issue exists.
+
+If an existing Issue was already created as an ordinary Issue and can be attached to the parent through **Add existing issue**, use that existing Issue rather than creating another replacement Issue. This preserves its history and avoids unnecessary duplicates.
+
+### Parent Completion Rule
+
+Closing all sub-issues does not by itself authorize closing the parent Issue.
+
+After the sub-issues are complete, verify the parent's own objective and acceptance criteria. Close the parent only when the parent objective is actually complete and the applicable integration/validation gates have passed.
+
 ### Issue-Specific Git Workflow
 
 Once an Issue or sub-issue is approved for implementation, use:

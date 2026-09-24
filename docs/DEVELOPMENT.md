@@ -956,6 +956,87 @@ If implementation reveals that the approved Issue/Sub-Issue requires changes to 
 
 An Issue/Sub-Issue branch does not authorize an architectural commitment merely because the implementation appears to require it.
 
+### 24.14 Parent Feature Branch and Sub-Issue Commit Traceability
+
+When a parent Issue contains multiple native sub-issues, the parent objective should normally use **one feature branch**.
+
+```text
+Parent Issue
+    │
+    ├── Native Sub-Issue A
+    ├── Native Sub-Issue B
+    └── Native Sub-Issue C
+             │
+             ▼
+      Parent feature branch
+             │
+             ├── commit → #A
+             ├── commit → #A
+             ├── commit → #B
+             └── commit → #C
+```
+
+The branch represents the parent objective. Each commit should reference the specific sub-issue whose work it primarily addresses:
+
+```bash
+git commit -m "<type>: <concise description> — #XX"
+```
+
+For example:
+
+```bash
+git commit -m "perf: implement reusable GRU workspace — #33"
+git commit -m "test: validate workspace allocation behavior — #33"
+git commit -m "feat: establish bounded GRU micro-batch execution — #34"
+```
+
+A commit may reference multiple Issues/sub-issues when one logical change genuinely spans them. Do not manufacture separate commits solely to create separate Issue references.
+
+The parent feature branch therefore provides parent-level implementation context, while commit references provide sub-issue-level traceability.
+
+### 24.15 Parent Completion and Sub-Issue Closure
+
+Sub-issues represent workstreams required by the parent objective. Completing all sub-issues is strong evidence that the parent work is approaching completion, but it does not automatically close the parent.
+
+After the relevant sub-issues are completed:
+
+1. verify the parent's own objective;
+2. verify the parent's acceptance criteria;
+3. verify applicable validation, review, and integration requirements;
+4. only then close the parent Issue.
+
+This prevents the parent from being treated as complete merely because its child workstreams have been closed.
+
+### 24.16 Native Sub-Issue Relationship
+
+A native GitHub parent/sub-issue relationship is distinct from a textual reference such as `Parent #XX` in an Issue body.
+
+Before treating an Issue as a child:
+
+1. inspect the proposed parent;
+2. verify that the candidate is genuinely a workstream/category required by the parent;
+3. establish the native GitHub sub-issue relationship;
+4. preserve the Issue's scope and history.
+
+An existing standalone Issue may be attached to the parent through GitHub's native **Sub-issues → Add existing issue** mechanism. When this is possible, prefer attaching the existing Issue rather than creating another replacement Issue.
+
+### 24.17 Duplicate Replacement and Historical Traceability
+
+When an existing standalone Issue is determined to be a child by nature:
+
+1. verify the supposed parent;
+2. create or attach the replacement as a native sub-issue;
+3. transfer the necessary scope, acceptance criteria, dependencies, evidence, and relevant history;
+4. explicitly identify the replacement relationship;
+5. add the `duplicate` label to the original Issue;
+6. add a closing comment identifying the replacement;
+7. close the original Issue as a duplicate.
+
+The original Issue should not be closed before the replacement native sub-issue exists.
+
+Historical duplicate Issues remain closed for traceability. Do not bulk-close Issues merely because their work appears related.
+
+
 ### 24.13 Issue Planning Approval
 
 Before creating, reopening, or substantially updating an Issue or sub-issue as part of planned work, the proposed action should be presented for review first.
