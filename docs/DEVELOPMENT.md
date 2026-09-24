@@ -716,7 +716,7 @@ Before creating, reopening, updating, or closing an issue:
 5. do not create duplicate labels, milestones, or issues;
 6. preserve the issue's relationship to the relevant architecture and evidence.
 
-For KiloCode or AI reviews, record the review/audit outcome in the relevant GitHub issue comment even when the issue remains open or is later closed.
+For development-agent or AI-assisted reviews, record the review/audit outcome in the relevant GitHub issue comment even when the issue remains open or is later closed.
 
 Implementation issues should not be created merely because an idea exists.
 
@@ -736,7 +736,246 @@ implementation
 
 when the work is architecture-sensitive.
 
----
+### 24.1 Issue Architecture: Parent Issues and Categorical Sub-Issues
+
+A **parent Issue** represents a meaningful feature, function, defect, or engineering objective.
+
+When that objective contains distinct categories of work with their own scope or evidence, use GitHub **sub-issues** to organize those workstreams.
+
+```text
+                    PARENT ISSUE
+              Feature / Function / Objective
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+          ▼              ▼              ▼
+   Implementation      Audit        Benchmark
+     sub-issue       sub-issue       sub-issue
+          │              │              │
+          └──────────────┼──────────────┘
+                         │
+                         ▼
+              Documentation / Integration
+                   when justified
+```
+
+The categories are **workstreams, not individual actions**.
+
+Repeated test runs remain under the same Test/Audit sub-issue. Repeated benchmark runs remain under the same Benchmark sub-issue. Do not create a new Issue or sub-issue merely because the same category of work must be rerun, adjusted, or repeated to satisfy the parent objective.
+
+Use a new sub-issue when the work becomes a materially different category or independently meaningful objective.
+
+### 24.2 Audit and Benchmark Separation
+
+Correctness/audit work and performance/benchmark work are separate categories even when they concern the same implementation.
+
+```text
+Parent Feature
+├── Implementation
+├── Correctness / Audit
+├── Benchmark / Performance
+└── Documentation / Integration, when justified
+```
+
+An audit establishes whether behavior and invariants are correct. A benchmark establishes measured performance/resource behavior. Neither substitutes for the other.
+
+### 24.3 Issue References and Development Traceability
+
+Every meaningful development action must reference the **Issue that owns the work**.
+
+Use the Issue number as the authoritative reference. Do not create a second internal numbering system for comments, test runs, benchmark runs, or development updates.
+
+When a sub-issue exists, reference the **sub-issue number** for work performed against that category. Reference the parent Issue when discussing the overall feature or objective.
+
+Issue comments, commits, Pull Requests, benchmark reports, audit findings, and development-agent reports should reference the owning Issue number when they represent meaningful work or evidence.
+
+### 24.4 Parent, Related, and Dependency Relationships
+
+These relationships must not be conflated.
+
+**Parent / sub-issue** — the child is a category required to complete the parent objective.
+
+**Dependency** — one Issue or sub-issue must be completed before another can proceed, even if it is not conceptually a child.
+
+```text
+#28 Shared Benchmark Harness
+          │
+          └──── dependency ────► #33 GRU Benchmark
+```
+
+A shared infrastructure Issue may therefore be a dependency of multiple feature or benchmark Issues without becoming a sub-issue of each one.
+
+**Related Issue** — two Issues concern the same component or evidence area, but neither is a parent/child relationship nor a prerequisite.
+
+This distinction prevents shared infrastructure, feature work, audits, and benchmarks from being forced into one hierarchy.
+
+### 24.5 Issue Scope and Reuse
+
+Same objective and same work category should remain under the existing Issue/sub-issue.
+
+Do not create a new sub-issue merely because:
+
+- a test must be rerun;
+- a benchmark must be rerun;
+- a benchmark configuration changes within the same objective;
+- an audit must repeat after a correction;
+- additional evidence is required for the same acceptance criteria;
+- implementation needs another iteration within the approved scope.
+
+Create a new Issue/sub-issue when the work becomes materially different in objective, category, acceptance criteria, API contract, architectural scope, or independently meaningful optimization.
+
+If a closed Issue's original objective remains incomplete, reopen it rather than creating a duplicate.
+
+If a completed Issue is followed by a genuinely new defect or objective, create the appropriate new Issue and reference the earlier work.
+
+### 24.6 Mandatory Issue-Driven Git Workflow
+
+Issue-specific development must follow:
+
+```text
+GitHub Issue / Sub-Issue
+  ↓
+Maintainer confirms scope
+  ↓
+Dedicated issue branch
+  ↓
+Design / Planning review as required
+  ↓
+Implementation
+  ↓
+Validation / Audit / Benchmark as applicable
+  ↓
+One logical issue update
+  ↓
+Commit with issue reference (#XX)
+  ↓
+Push issue branch
+  ↓
+Pull Request
+  ↓
+Review + validation
+  ↓
+Merge into main
+  ↓
+Issue / sub-issue closes when appropriate
+  ↓
+User / maintainer deletes feature branch
+```
+
+`main` is the integration branch. Issue-specific implementation must not be performed directly on `main`.
+
+Preferred branch naming:
+
+```text
+issue-XX-short-description
+```
+
+The branch should correspond to the Issue or sub-issue whose work is being implemented.
+
+The user/maintainer deletes the feature branch after merge. Development agents must not delete it unless explicitly authorized.
+
+### 24.7 One Issue Update = One Logical Commit = One Push
+
+For Seqvex issue work, treat each authorized **issue update** as one coherent delivery unit:
+
+```text
+Issue / Sub-Issue update
+        ↓
+one logical commit
+        ↓
+one push
+```
+
+The commit must use `-m` and reference the owning Issue:
+
+```bash
+git commit -m "<type>: <concise description> — #XX"
+git push origin issue-XX-short-description
+```
+
+The commit should contain only the work belonging to that Issue/Sub-Issue update.
+
+This rule does not authorize combining unrelated work into one commit. If a proposed update spans multiple independent Issues or categories, stop and resolve the scope before committing.
+
+### 24.8 Separate Authorization Gates
+
+Authorization for one development action must not be inferred from another. The following are separate gates:
+
+1. issue/sub-issue creation, reopening, or update;
+2. branch creation;
+3. implementation;
+4. commit;
+5. push;
+6. Pull Request creation;
+7. merge;
+8. issue/sub-issue closure or other issue-state mutation;
+9. branch deletion.
+
+Implementation authorization alone does not authorize commit, push, PR creation, merge, issue mutation, or branch deletion.
+
+### 24.9 Working-Tree Protection
+
+Before issue-specific work and before committing:
+
+```bash
+git status
+git diff
+```
+
+Preserve unrelated pre-existing changes. Do not reset, stash, clean, overwrite, discard, or commit unrelated changes merely to make issue work easier.
+
+Before committing, stage only files belonging to the authorized Issue/Sub-Issue and inspect the staged diff. Avoid `git add .` when unrelated changes may be present.
+
+Do not force-push or rewrite published history without explicit authorization.
+
+### 24.10 Issue-Linked Commits and Pull Requests
+
+Use:
+
+```text
+<type>: <concise description> — #XX
+```
+
+Recommended types include `feat`, `fix`, `test`, `docs`, `refactor`, `perf`, and `chore`.
+
+Use `perf` only when supported by measurement. Use `Closes #XX`, `Fixes #XX`, or `Resolves #XX` only when the Issue/Sub-Issue objective is genuinely complete.
+
+A Pull Request should identify the Issue/Sub-Issue, parent Issue when applicable, scope, implementation, validation, architectural implications, and known limitations. Merge requires the applicable review, validation, architecture, and authorization gates.
+
+### 24.11 Conflict-First Rule
+
+If a conflict, contradiction, error, inconsistency, or architectural ambiguity is identified during planning, implementation, testing, audit, or review:
+
+> **Resolve the identified conflict before extending the feature or continuing implementation.**
+
+Do not silently work around a highlighted conflict. Defer or ignore it only when the user/maintainer explicitly instructs that it should be deferred or ignored.
+
+### 24.12 Architecture Escalation During Issue Work
+
+If implementation reveals that the approved Issue/Sub-Issue requires changes to state/model ownership, `StateModel`, `StreamingExecutor`, workspace or scratch ownership, execution topology, memory representation, device placement, heterogeneous memory, concurrency, scheduler, micro-batch semantics, workspace/context abstractions, public API boundaries, or another deferred architectural decision, stop at the architectural boundary and perform the appropriate CRITICAL ARCHITECTURE REVIEW before continuing.
+
+An Issue/Sub-Issue branch does not authorize an architectural commitment merely because the implementation appears to require it.
+
+### 24.13 Issue Planning Approval
+
+Before creating, reopening, or substantially updating an Issue or sub-issue as part of planned work, the proposed action should be presented for review first.
+
+The proposal should clearly state:
+
+1. **Issue action** — create, reopen, update, or continue an existing Issue/sub-issue.
+2. **Issue** — the Issue number and title, when an existing Issue is involved.
+3. **Parent relationship** — parent Issue, when applicable.
+4. **Objective** — what engineering outcome the work addresses.
+5. **Category** — implementation, audit, benchmark, documentation/integration, or another meaningful work category.
+6. **Planned change** — what will be investigated, modified, tested, or benchmarked.
+7. **Classification** — proposed Issue Type, Area label, Nature label(s), and Milestone where applicable.
+8. **Relationship** — why this belongs to the selected Issue/sub-issue rather than a different or new Issue.
+
+Do not create, reopen, or substantially update the Issue until the user has given explicit approval in the chat.
+
+This approval applies especially when planning or carrying out feature implementation, new algorithms, modifications, optimization audits, debugging, benchmarking, or architectural changes.
+
+The purpose is to keep Issue scope deliberate and prevent duplicate, overly broad, or prematurely created Issues.
 
 # 25. Deferred Decisions
 
@@ -930,12 +1169,11 @@ It is not measured by:
 |---|---|
 | `README.md` | Project identity, vision, scope, and public orientation |
 | `ARCHITECTURE.md` | Architectural reasoning, system structure, and design decisions |
-| `DEVELOPMENT.md` | Development rules for humans and AI |
+| `DEVELOPMENT.md` | Development rules for humans and development agents |
 | `ROADMAP.md` | Current development direction and phase planning |
 | `FAILURE_AND_RECOVERY.md` | Failure paths, state integrity, and recovery principles |
 | `CONTRIBUTING.md` | Contributor participation and contribution process |
-| `KILOCODE_CONTEXT.md` | AI-oriented architectural comprehension before repository work |
-| `KILO_SCAFFOLD.md` | Current KiloCode scaffolding constraints |
+| AI-assisted development guidance | Tool-neutral guidance for development agents and AI-assisted repository work |
 
 If another document conflicts with this development contract, determine whether the conflict is an outdated document, a deliberate architectural change, or a missing clarification.
 
@@ -946,3 +1184,88 @@ Do not silently choose one interpretation.
 # Final Principle
 
 > **Seqvex should be built by learning the problem deeply, implementing the smallest understandable mechanism, measuring its behavior, and allowing evidence—not speculation—to determine the architecture.**
+
+# 33. Algorithm Development Lifecycle
+
+Each substantive ML/RL algorithm should progress through a complete lifecycle:
+
+```text
+Research / mathematical specification
+  ↓
+Reference implementation
+  ↓
+Independent correctness audit
+  ↓
+Sequential / non-IID audit
+  ↓
+Numerical / statistical audit
+  ↓
+Performance measurement
+  ↓
+Local optimization when justified
+  ↓
+Documentation / integration
+```
+
+Optimization is not opened merely because an implementation exists. It requires correctness evidence, a measured bottleneck, and a local optimization that does not silently establish a deferred architectural decision.
+
+## 33.1 Five-Algorithm Architecture Gate
+
+After the fifth algorithm completes its lifecycle, perform a **post-five Pre-Hardware Optimization Audit** across the algorithms and shared execution infrastructure.
+
+This is distinct from an earlier or partial audit performed before the five-algorithm set is complete.
+
+The post-five audit should examine:
+
+- execution semantics;
+- state and transition semantics;
+- failure atomicity;
+- ordering and causality where applicable;
+- numerical behavior;
+- statistical assumptions;
+- long-horizon behavior;
+- reset and stream isolation;
+- performance baselines;
+- allocation/resource behavior;
+- repeated implementation patterns;
+- evidence for shared abstractions;
+- hardware-aware execution implications.
+
+Only after this evidence is reviewed should Seqvex settle the execution architecture required for the next optimization phase.
+
+## 33.2 Common Audit Core and Algorithm-Specific Audit
+
+Seqvex may use a **Common Audit Core + Algorithm-Specific Audit** model.
+
+Common categories may include reference correctness, validation, state/transition behavior, failure atomicity, reset/isolation, ordering/causality where applicable, numerical stability, statistical assumptions, long-horizon behavior, performance baseline, allocation/resource behavior, and API/integration behavior.
+
+A common category does not imply an identical test for every algorithm. Do not implement a generic audit framework merely to formalize this concept before repeated evidence demonstrates that it is useful.
+
+## 33.3 Optimization Gate
+
+A local optimization should satisfy all of the following:
+
+1. correctness has already been established;
+2. the bottleneck is measured;
+3. the optimization is local and understandable;
+4. mathematical and sequential semantics are preserved;
+5. the change does not silently settle a deferred architecture decision;
+6. the resulting behavior is benchmarked again.
+
+Allocation reduction is not, by itself, evidence of lower latency or higher throughput.
+
+## 33.4 Evidence Classification
+
+Development decisions should distinguish:
+
+```text
+FACT
+MEASURED EVIDENCE
+INFERENCE
+ASSUMPTION
+PROVISIONAL DECISION
+ARCHITECTURAL DECISION
+OPEN QUESTION
+```
+
+Do not present an inference as a measurement, an assumption as a fact, or a provisional decision as a settled architectural decision.

@@ -308,91 +308,166 @@ Use the dimensions together:
 This separation is important because Seqvex relies heavily on labels for issue
 discovery, filtering, ownership, and contributor orientation.
 
-## Issue Lifecycle and Scope
+## Issue Architecture and Scope
 
 Create an Issue when work represents a distinct engineering objective that
 can be described with its own scope and acceptance criteria.
 
+A parent Issue should normally represent a meaningful feature, function,
+defect, or engineering objective. When that objective contains distinct
+categories of work with their own scope or evidence, use GitHub sub-issues to
+organize those workstreams.
+
+```text
+                    PARENT ISSUE
+              Feature / Function / Objective
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+          ▼              ▼              ▼
+   Implementation      Audit        Benchmark
+     sub-issue       sub-issue       sub-issue
+          │              │              │
+          └──────────────┼──────────────┘
+                         │
+                         ▼
+              Documentation / Integration
+                   when justified
+```
+
+The categories are workstreams, not individual actions.
+
+Rerunning a test remains under the same Test/Audit sub-issue. Rerunning a
+benchmark remains under the same Benchmark sub-issue. Do not create a new
+Issue or sub-issue merely because the same category of work must be rerun,
+adjusted, or repeated to satisfy the parent objective.
+
+Use a new sub-issue when the work becomes a materially different category or
+an independently meaningful objective.
+
+### Audit and Benchmark Separation
+
+Correctness/audit work and performance/benchmark work are separate categories
+even when they concern the same implementation.
+
+```text
+Parent Feature
+├── Implementation
+├── Correctness / Audit
+├── Benchmark / Performance
+└── Documentation / Integration, when justified
+```
+
+An audit establishes whether behavior and invariants are correct. A benchmark
+establishes measured performance/resource behavior. Neither substitutes for the
+other.
+
+### Issue References and Development Traceability
+
+Every meaningful development action must reference the Issue that owns the
+work.
+
+Use the GitHub Issue number as the authoritative reference. Do not create a
+second internal numbering system for comments, test runs, benchmark runs, or
+development updates.
+
+When a sub-issue exists, reference the sub-issue number for work performed
+against that category. Reference the parent Issue when discussing the overall
+feature or objective.
+
+### Parent, Related, and Dependency Relationships
+
+These relationships must not be conflated.
+
+**Parent / sub-issue** — the child is a category required to complete the
+parent objective.
+
+**Dependency** — one Issue or sub-issue must be completed before another can
+proceed, even if it is not conceptually a child.
+
+```text
+#28 Shared Benchmark Harness
+          │
+          └──── dependency ────► #33 GRU Benchmark
+```
+
+A shared infrastructure Issue may therefore be a dependency of multiple
+feature or benchmark Issues without becoming a sub-issue of each one.
+
+**Related Issue** — two Issues concern the same component or evidence area, but
+neither is a parent/child relationship nor a prerequisite.
+
+### Issue Scope and Reuse
+
 Do not create a new Issue merely because an existing Issue requires an
-implementation modification, additional test, benchmark adjustment, or other
-work necessary to satisfy the same objective.
+implementation modification, additional test, benchmark adjustment, rerun,
+audit repeat, or other work necessary to satisfy the same objective.
+
+Same objective and same work category should remain under the existing
+Issue/sub-issue.
+
+Do not create a new sub-issue merely because:
+
+- a test must be rerun;
+- a benchmark must be rerun;
+- a benchmark configuration changes within the same objective;
+- an audit must repeat after a correction;
+- additional evidence is required for the same acceptance criteria;
+- implementation needs another iteration within the approved scope.
+
+Create a new Issue/sub-issue when work introduces a materially different
+objective, category, acceptance criteria, API contract, architectural change,
+or independently meaningful optimization.
 
 If a closed Issue's original objective remains incomplete, reopen the existing
 Issue rather than creating a duplicate.
 
-Create a new Issue when work introduces a materially different objective,
-scope, acceptance criteria, API contract, architectural change, or
-independently meaningful optimization.
+If a completed Issue is followed by a genuinely new regression or distinct
+failure, create a new Bug Issue and reference the related Issue.
 
-A new Issue should reference the related Issue when the work is a follow-up,
-regression, or consequence of earlier work.
-
-Component similarity alone is not sufficient reason to reuse an Issue. Area
-labels identify where work belongs; Issues identify the specific engineering
-objective.
-
-### Optimization and modification rule
+### Optimization and Modification Rule
 
 An optimization is not automatically a new Issue. Determine whether it is
 optimizing the same identified bottleneck or engineering objective.
 
-For example, additional implementation work required to complete the same
-`Matrix::mul_vector` allocation optimization remains part of that Issue.
-A later, independently scoped optimization of the GRU numerical hot path is
-a separate objective and should have its own Issue.
+A modification remains part of an existing Issue when it is needed to satisfy
+that Issue's existing objective and acceptance criteria. A modification that
+introduces a materially different API contract, architectural change, or
+independently meaningful objective should be tracked separately.
 
-Likewise, a modification remains part of an existing Issue when it is needed
-to satisfy that Issue's existing objective and acceptance criteria. A
-modification that introduces a materially different API contract, architectural
-change, or independently meaningful objective should be tracked separately.
-
-### Bug rule
-
-If an existing bug remains unresolved, reopen the existing Issue rather than
-creating a duplicate.
-
-If a completed Issue is followed by a genuinely new regression or distinct
-failure, create a new Bug Issue and reference the related Issue.
-
-### Do not create Issues for implementation steps
-
-Do not create a separate Issue merely for work such as:
-
-- renaming a variable;
-- adding a test required by an existing Issue;
-- fixing formatting;
-- changing an implementation approach within the existing scope;
-- updating comments or documentation required to complete the existing Issue;
-- adjusting benchmark methodology for the same optimization objective.
-
-These should normally remain within the existing Issue and its associated
-implementation work.
-
-### Seqvex Issue decision tree
-
-Use the following decision tree before creating, reopening, or reusing an
-Issue:
+### Seqvex Issue Decision Tree
 
 ```text
-                Does work already have an existing Issue?
+                  Does an owning Issue already exist?
                               │
                          ┌────┴────┐
                          │         │
                         Yes        No
                          │         │
                          ▼         ▼
-              Is it the same    Is it a
-              objective?        meaningful
-                         │       objective?
-                    ┌────┴────┐       │
-                   Yes        No      Yes
-                    │          │       │
-                    ▼          ▼       ▼
-                 SAME       NEW      CREATE
-                 ISSUE      ISSUE    ISSUE
+                  Same objective?  Is this a
+                         │          meaningful
+                    ┌────┴────┐     objective?
+                   Yes        No        │
+                    │          │       Yes
+                    ▼          ▼        ▼
+              Same Issue /   New      CREATE
+              Sub-Issue      Issue
                     │
                     ▼
-             Is the Issue closed?
+              Is this a new
+              work category?
+                    │
+               ┌────┴────┐
+              No         Yes
+               │           │
+               ▼           ▼
+           Continue     Create a
+           existing     sub-issue
+           category
+                    │
+                    ▼
+             Is the work closed?
                     │
                ┌────┴────┐
               Yes        No
@@ -403,38 +478,123 @@ Issue:
 
 The key rule is:
 
-> **Same objective → same Issue.**  
+> **Same objective + same category → same Issue/sub-issue.**  
+> **Same objective + new meaningful category → new sub-issue.**  
 > **New objective → new Issue.**  
-> **Closed but same objective remains incomplete → reopen.**  
-> **Completed objective followed by genuinely new work → new Issue.**
+> **Closed but same objective remains incomplete → reopen.**
 
-### Issue planning approval
+### Issue-Specific Git Workflow
 
-Before creating, reopening, or substantially updating an Issue as part of
-work planned in ChatGPT, the proposed Issue action should be presented for
-review first.
+Once an Issue or sub-issue is approved for implementation, use:
 
-The proposal should clearly state:
+```text
+GitHub Issue / Sub-Issue
+  ↓
+Maintainer confirms scope
+  ↓
+Dedicated issue branch
+  ↓
+Design / Planning review as required
+  ↓
+Implementation
+  ↓
+Validation / Audit / Benchmark as applicable
+  ↓
+One logical issue update
+  ↓
+Commit with issue reference (#XX)
+  ↓
+Push issue branch
+  ↓
+Pull Request
+  ↓
+Review + validation
+  ↓
+Merge into main
+  ↓
+Issue / sub-issue closes when appropriate
+  ↓
+User / maintainer deletes feature branch
+```
 
-1. **Issue action** — create, reopen, update, or continue an existing Issue.
-2. **Issue** — the Issue number and title, when an existing Issue is involved.
-3. **Objective** — what engineering outcome the work addresses.
-4. **Planned change** — what will be investigated, modified, tested, or
-   benchmarked.
-5. **Classification** — proposed Issue Type, Area label, Nature label(s), and
-   Milestone where applicable.
-6. **Relationship** — why this belongs to the selected Issue rather than a
-   different or new Issue.
+Issue-specific development must not be performed directly on `main`.
 
-Do not create, reopen, or substantially update the Issue until the user has
-given explicit approval in the chat.
+Preferred branch naming is `issue-XX-short-description`. The branch should
+correspond to the Issue or sub-issue whose work is being implemented.
 
-This approval applies especially when planning or carrying out feature
-implementation, new algorithms, modifications, optimization audits, debugging,
-benchmarking, or architectural changes.
+The user/maintainer deletes the feature branch after merge; development
+agents must not do so without explicit authorization.
 
-The purpose is to keep Issue scope deliberate and prevent duplicate, overly
-broad, or prematurely created Issues.
+### One Issue Update = One Logical Commit = One Push
+
+For Seqvex issue work, treat each authorized issue update as one coherent
+delivery unit:
+
+```text
+Issue / Sub-Issue update
+        ↓
+one logical commit
+        ↓
+one push
+```
+
+Use:
+
+```bash
+git commit -m "<type>: <concise description> — #XX"
+git push origin issue-XX-short-description
+```
+
+The commit must contain only work belonging to that Issue/Sub-Issue update.
+If a proposed update spans multiple independent Issues or categories, stop and
+resolve the scope before committing.
+
+### Separate Authorization Gates
+
+The following permissions are independent:
+
+- issue/sub-issue creation/reopening/update;
+- branch creation;
+- implementation;
+- commit;
+- push;
+- Pull Request creation;
+- merge;
+- issue/sub-issue closure or other issue-state mutation;
+- branch deletion.
+
+Implementation authorization does not automatically authorize commit, push, PR
+creation, merge, issue mutation, or branch deletion.
+
+### Working-Tree and Commit Discipline
+
+Before issue-specific work and before committing:
+
+```bash
+git status
+git diff
+```
+
+Preserve unrelated pre-existing changes. Do not reset, stash, clean, overwrite, or discard them merely to make issue work easier.
+
+Before committing, inspect the working tree and diff, stage only files belonging to the authorized Issue/Sub-Issue, and inspect the staged diff. Avoid `git add .` when unrelated changes may be present.
+
+Do not force-push or rewrite published history without explicit authorization.
+
+### Commit Convention
+
+Use:
+
+```text
+<type>: <concise description> — #XX
+```
+
+Recommended types include `feat`, `fix`, `test`, `docs`, `refactor`, `perf`, and `chore`.
+
+Use `perf` only when supported by measurement. Use `Closes #XX`, `Fixes #XX`, or `Resolves #XX` only when the Issue/Sub-Issue objective is genuinely complete.
+
+A Pull Request should state the Issue/Sub-Issue, parent Issue when applicable, scope, implementation, validation, architectural implications, and known limitations. Merge should occur only after the relevant review, validation, architecture, and authorization gates have passed.
+
 ## A Simple Rule
 
 When in doubt:
@@ -442,3 +602,51 @@ When in doubt:
 > Understand the problem → build the smallest experiment → measure → then generalize.
 
 Seqvex should grow from demonstrated requirements rather than from speculative complexity.
+
+## Algorithm Development and Audit Lifecycle
+
+For substantive ML/RL algorithms, Seqvex uses:
+
+```text
+Research / mathematical specification
+  ↓
+Reference implementation
+  ↓
+Independent correctness audit
+  ↓
+Sequential / non-IID audit
+  ↓
+Numerical / statistical audit
+  ↓
+Performance measurement
+  ↓
+Local optimization when justified
+  ↓
+Documentation / integration
+```
+
+After the fifth algorithm completes its lifecycle, conduct a **post-five Pre-Hardware Optimization Audit** across the algorithms and shared execution infrastructure. This is distinct from any earlier or partial audit.
+
+The audit should consider correctness/reference behavior, validation, state/transition behavior, failure atomicity, reset/isolation, ordering/causality where applicable, numerical stability, statistical assumptions, long-horizon behavior, performance baselines, allocation/resource behavior, repeated implementation patterns, evidence for shared abstractions, and hardware-aware execution implications.
+
+Seqvex may eventually formalize this as a **Common Audit Core + Algorithm-Specific Audit** model. A common category does not mean identical tests across algorithms, and a generic audit framework should not be implemented until repeated evidence justifies it.
+
+### Optimization Gate
+
+Optimization requires correctness evidence, a measured bottleneck, a local understandable change, preserved mathematical/sequential semantics, no silent settlement of a deferred architecture decision, and a follow-up benchmark or measurement.
+
+Allocation reduction alone does not establish lower latency or higher throughput.
+
+### Evidence Language
+
+Distinguish:
+
+- **FACT**
+- **MEASURED EVIDENCE**
+- **INFERENCE**
+- **ASSUMPTION**
+- **PROVISIONAL DECISION**
+- **ARCHITECTURAL DECISION**
+- **OPEN QUESTION**
+
+Do not present an inference as measured evidence or a provisional decision as a settled architecture.
