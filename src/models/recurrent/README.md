@@ -565,6 +565,80 @@ for reusable scratch.
 
 Measured streaming benefit was strongest for the small GRU configuration and became small or indistinguishable from benchmark noise at larger configurations.
 
+## Authoritative evidence (#18)
+
+`SEQVEX_EVIDENCE_ONLY=1 cargo bench --bench gru`, release profile, Workload A
+(deterministic persistent excitation). The authoritative Issue #18 dataset is
+the integrated streaming pair only — `StreamingExecutor::process_one` (reference)
+versus `StreamingExecutor::process_one_optimized` (optimized) — over the four
+required dimensions with 30 measured runs per combination:
+**4 dimensions × 2 paths × 30 runs = 240 authoritative samples**. The harness
+retains one sample per run (warm-up samples are not stored), so `N = 30` per row.
+Latency is nanoseconds per step; allocations and bytes are steady state per step.
+
+| Dimension | Path | N | median | p95 | min | max | IQR | allocs/step | bytes/step |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 8×16 | reference | 30 | 982.4 | 1045.4 | 925.7 | 1058.2 | 56.3 | 20.000 | 1280.0 |
+| 8×16 | optimized | 30 | 684.0 | 723.5 | 613.3 | 731.3 | 59.6 | 0.000 | 0.0 |
+| 32×64 | reference | 30 | 7087.8 | 7653.8 | 6650.5 | 7729.0 | 421.9 | 20.000 | 5120.0 |
+| 32×64 | optimized | 30 | 6707.6 | 7343.6 | 6276.6 | 7682.4 | 280.3 | 0.000 | 0.0 |
+| 128×256 | reference | 30 | 113210.7 | 116462.6 | 110672.3 | 117198.6 | 1509.9 | 20.000 | 20480.0 |
+| 128×256 | optimized | 30 | 112694.0 | 116914.2 | 110518.9 | 119539.2 | 2399.7 | 0.000 | 0.0 |
+| 256×512 | reference | 30 | 533991.2 | 554917.3 | 521874.6 | 595548.3 | 14148.9 | 20.000 | 40960.0 |
+| 256×512 | optimized | 30 | 538514.1 | 555136.1 | 516978.7 | 567426.8 | 17291.0 | 0.000 | 0.0 |
+
+### Dimension comparison
+
+Materiality is the harness `common::materiality` classification applied to the
+streaming medians and IQRs (strict `>`; `|Δmedian| > 2·max(IQR)` **and**
+`|Δmedian| > 5 %·max(median)`). Latency Δ% is `|median_ref − median_opt| /
+median_ref`; allocation and bytes Δ% are reductions relative to the reference.
+
+| Dimension | N ref | N opt | median ref | median opt | latency Δ% | IQR ref | IQR opt | 2×max(IQR) | separation | materiality | allocs ref | allocs opt | alloc Δ% | bytes ref | bytes opt | bytes Δ% | interpretation |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---|
+| 8×16 | 30 | 30 | 982.4 | 684.0 | 30.4 % | 56.3 | 59.6 | 119.2 | 298.4 | clearly measurable | 20.000 | 0.000 | 100 % | 1280 | 0 | 100 % | smallest tested model; allocation overhead is material |
+| 32×64 | 30 | 30 | 7087.8 | 6707.6 | 5.4 % | 421.9 | 280.3 | 843.8 | 380.2 | borderline/noisy | 20.000 | 0.000 | 100 % | 5120 | 0 | 100 % | separation below 2×IQR; not a stable material improvement |
+| 128×256 | 30 | 30 | 113210.7 | 112694.0 | 0.5 % | 1509.9 | 2399.7 | 4799.4 | 516.7 | not materially different | 20.000 | 0.000 | 100 % | 20480 | 0 | 100 % | allocation overhead small versus recurrent computation |
+| 256×512 | 30 | 30 | 533991.2 | 538514.1 | 0.8 % | 14148.9 | 17291.0 | 34582.0 | 4522.9 | not materially different | 20.000 | 0.000 | 100 % | 40960 | 0 | 100 % | allocation overhead small versus recurrent computation |
+
+### Findings
+
+- **Allocation:** the production path removes the reference path's **20
+  allocations/step** at every authoritative dimension on the integrated
+  streaming path, giving `0` steady-state allocations and `0` bytes. This is an
+  allocation result, recorded independently of latency.
+- **Latency:** within the tested workload and dimensions, the latency effect was
+  strongest at the smallest model size and was not materially distinguishable at
+  the larger authoritative dimensions.
+- `8×16` means input dimension `8`, hidden dimension `16`: it is the **smallest
+  model in the required benchmark matrix**, and it shows that the eliminated
+  allocation overhead can become large enough to produce an observable latency
+  benefit when the recurrent computation itself is small. This is a
+  **small-model boundary measurement**, not evidence of how often such a model
+  occurs in production; the benchmark evaluates model-size sensitivity, not
+  deployment frequency.
+- At `32×64` the separation is `borderline/noisy`, and at `128×256` and `256×512`
+  the paths are **not materially different**. As model size grows, the fixed
+  allocation overhead becomes smaller relative to the recurrent computation, so
+  allocation elimination does not necessarily produce a material end-to-end
+  latency improvement.
+- These are bounded observations for the tested workload, dimensions, host, and
+  toolchain — not a rule for every GRU architecture, CPU, compiler, or
+  deployment environment.
+
+### Supplementary large-model diagnostic (not authoritative)
+
+`512×1024` is **outside** the required four-dimension Issue #18 acceptance matrix
+and is retained only as contextual evidence. It was measured with a reduced
+100-step run (the authoritative dimensions use 500–50 000 steps), so it is
+measurement-limited. Its direct `Gru::step` / `step_in_place` pair crossed the
+materiality rule only marginally (`3109705.8` vs `2931934.1` ns/step), while the
+integrated streaming pair did **not** (`2816654.9` vs `2766839.9` ns/step, a
+separation of `49814.9` against `2·max(IQR) = 210296.4`). Because the direct and
+streaming measurements are inconsistent with each other, this diagnostic does
+**not** establish a stable large-model production-path latency advantage and does
+not alter the authoritative Issue #18 conclusion.
+
 Therefore:
 
 > **Allocation elimination is demonstrated; universal latency improvement is not.**
