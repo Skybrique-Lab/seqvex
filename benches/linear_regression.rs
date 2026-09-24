@@ -1,62 +1,26 @@
-//! Linear-regression prediction benchmarks: reference, streaming, and bounded
-//! micro-batch, with allocations and bytes per observation.
+//! Linear-regression prediction benchmarks: control (fixed observation) and
+//! decision-grade sequential workloads A/B/C, with allocations and bytes.
 //!
 //! Run with `cargo bench --bench linear_regression`.
 //!
-//! `harness = false` with `std::time::Instant` keeps the project dependency-free.
-//! Each path is measured over repeated runs and reported as median / min / max /
-//! IQR, because a micro-batch is often assumed to be faster and that assumption
-//! must be measured rather than asserted.
-//!
-//! Under the debug test profile (`cargo test --all-targets` executes
-//! `harness = false` benchmarks) the run count and step counts are shortened so
-//! the test command stays usable; those numbers are never used for decisions.
+//! LR is the profiling control: effectively stateless prediction expected to be
+//! `O(D)` and allocation-free. The decision-grade workload matrix is executed in
+//! the optimized profile only; the debug test profile runs the existing control
+//! and `verify_workloads()` so `cargo test --all-targets` stays usable, and its
+//! numbers are never used for decisions.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
-use std::mem::size_of;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
 use seqvex::execution::streaming::StreamingExecutor;
 use seqvex::foundation::numerical::Vector;
 use seqvex::foundation::observation::Observation;
+use seqvex::foundation::state::process_one;
 use seqvex::models::classic::LinearRegression;
 
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-static ALLOCATED_BYTES: AtomicU64 = AtomicU64::new(0);
+#[allow(dead_code)]
+mod common;
 
-struct CountingAllocator;
-
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED_BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        unsafe { System.dealloc(ptr, layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        ALLOCATED_BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
-
-#[global_allocator]
-static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-/// Repeated timing runs per path and configuration.
-const RUNS: usize = if cfg!(debug_assertions) { 1 } else { 20 };
-
-/// Shortens the measurement under the debug test profile.
-fn timed_steps(steps: u32) -> u32 {
-    if cfg!(debug_assertions) { 200 } else { steps }
-}
-
+/// Existing fixed-observation control model (unchanged formula).
 fn model(features: usize) -> LinearRegression {
     LinearRegression::new(
         Vector::from_fn(features, |index| (index as f32 * 0.37).sin()),
@@ -65,90 +29,153 @@ fn model(features: usize) -> LinearRegression {
     .unwrap()
 }
 
-fn percentile(sorted: &[f64], fraction: f64) -> f64 {
-    if sorted.is_empty() {
-        return 0.0;
-    }
-    let index = (((sorted.len() as f64 - 1.0) * fraction).round() as usize).min(sorted.len() - 1);
-    sorted[index]
+/// Workload model whose weights are the deterministic `w*`, so the sequential
+/// workload's predictions are meaningful.
+fn workload_model(features: usize) -> LinearRegression {
+    LinearRegression::new(Vector::from_slice(&common::fixed_weights(features)), 0.125).unwrap()
 }
 
-/// Runs `body` for a warmup plus `RUNS` timed runs and reports per-observation
-/// latency, through-steps, and allocations.
-///
-/// `work_per_call` is the number of observations each `body` call processes, so
-/// a bounded micro-batch can be compared with single-observation paths on the
-/// same per-observation scale.
-fn measure(label: &str, steps: u32, work_per_call: usize, mut body: impl FnMut()) {
-    let work_per_call = work_per_call as f64;
-    let observations = f64::from(steps) * work_per_call;
-
-    for _ in 0..(steps / 10).max(if cfg!(debug_assertions) { 50 } else { 1000 }) {
-        body();
-    }
-
-    let mut samples = Vec::with_capacity(RUNS);
-    let mut allocations = 0.0;
-    let mut bytes = 0.0;
-    for _ in 0..RUNS {
-        let allocations_before = ALLOCATIONS.load(Ordering::Relaxed);
-        let bytes_before = ALLOCATED_BYTES.load(Ordering::Relaxed);
-        let start = Instant::now();
-        for _ in 0..steps {
-            body();
-        }
-        let elapsed = start.elapsed();
-        allocations =
-            (ALLOCATIONS.load(Ordering::Relaxed) - allocations_before) as f64 / observations;
-        bytes = (ALLOCATED_BYTES.load(Ordering::Relaxed) - bytes_before) as f64 / observations;
-        samples.push(elapsed.as_nanos() as f64 / observations);
-    }
-
-    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median = percentile(&samples, 0.5);
-    let min = samples[0];
-    let max = samples[samples.len() - 1];
-    let q1 = percentile(&samples, 0.25);
-    let q3 = percentile(&samples, 0.75);
-    let iqr = q3 - q1;
-    let throughput = 1e9 / median;
-
-    println!(
-        "{label:<20} {median:>9.1} ns/obs median (min {min:.1}, max {max:.1}, iqr {iqr:.1})  \
-         {throughput:.0} obs/s  {allocations:.3} allocs/obs  {bytes:.1} bytes/obs"
-    );
+fn control_steps(features: usize) -> u32 {
+    common::timed_steps(match features {
+        8 | 32 => 200_000,
+        128 => 50_000,
+        _ => 20_000,
+    })
 }
 
 fn main() {
-    println!("Linear-regression prediction benchmark ({RUNS} runs/measurement)\n");
+    println!(
+        "Linear-regression prediction benchmark ({} runs/measurement)",
+        common::RUNS
+    );
+    common::verify_workloads();
+    println!("{}", common::env_summary());
 
-    for (features, micro_batch) in [(8_usize, 32_usize), (32, 32), (128, 16)] {
-        let steps = timed_steps(if features <= 32 { 200_000 } else { 50_000 });
+    // Control: existing fixed observation, reference / streaming / micro-batch.
+    println!("\n== control (fixed observation) ==");
+    for (features, micro_batch) in [(8_usize, 32_usize), (32, 32), (128, 16), (256, 8)] {
+        let steps = control_steps(features);
         println!("features={features} micro_batch={micro_batch} steps={steps}");
 
         let observation = Observation::new(Vector::from_fn(features, |i| (i as f32 * 0.31).sin()));
         let batch = vec![observation.clone(); micro_batch];
 
         let reference = model(features);
-        measure("reference", steps, 1, || {
+        common::measure("reference", steps, 1, || {
             black_box(reference.predict(black_box(observation.value())).unwrap());
         });
 
         let mut streaming_model = model(features);
         let mut executor = StreamingExecutor::new(&mut streaming_model, 0.0);
-        measure("streaming", steps, 1, || {
+        common::measure("streaming", steps, 1, || {
             black_box(executor.process_one(black_box(&observation)).unwrap());
         });
 
         let micro_batch_model = model(features);
-        measure("micro-batch", steps, micro_batch, || {
+        common::measure("micro-batch", steps, micro_batch, || {
             black_box(micro_batch_model.predict_batch(black_box(&batch)).unwrap());
         });
+    }
 
-        println!(
-            "    weights {} bytes; micro-batch output {} bytes/prediction\n",
-            features * size_of::<f32>(),
-            size_of::<f32>(),
-        );
+    if cfg!(debug_assertions) {
+        println!("\ndecision-grade workload matrix skipped in the debug profile");
+        return;
+    }
+
+    // Decision-grade workloads A/B/C over the required dimensions.
+    let dimensions = [8_usize, 32, 128, 256];
+    for workload in ["A", "B", "C"] {
+        println!("\n== workload {workload} ==");
+        let mut scaling: Vec<(f64, f64)> = Vec::new();
+        for &features in &dimensions {
+            let steps = control_steps(features);
+            let xs = match workload {
+                "A" => common::persistent_excitation_features(features, 2048),
+                "B" => common::structured_features(
+                    features,
+                    2048,
+                    common::AR_COEFFICIENT,
+                    common::STRUCTURED_SEED,
+                ),
+                _ => common::persistent_excitation_features(features, steps as usize),
+            };
+            let observations: Vec<Observation<Vector>> = xs
+                .iter()
+                .map(|x| Observation::new(Vector::from_slice(x)))
+                .collect();
+            println!(
+                "LR workload={workload} features={features} steps={steps} stream={}",
+                observations.len()
+            );
+
+            common::measure_startup("init", common::startup_reps(), || {
+                black_box(workload_model(features));
+            });
+
+            let direct = workload_model(features);
+            let mut index = 0_usize;
+            let stats = common::measure("reference", steps, 1, || {
+                let observation = &observations[index % observations.len()];
+                index += 1;
+                black_box(direct.predict(black_box(observation.value())).unwrap());
+            });
+
+            let mut streaming_model = workload_model(features);
+            let mut executor = StreamingExecutor::new(&mut streaming_model, 0.0);
+            let mut stream_index = 0_usize;
+            common::measure("streaming", steps, 1, || {
+                let observation = &observations[stream_index % observations.len()];
+                stream_index += 1;
+                black_box(executor.process_one(black_box(observation)).unwrap());
+            });
+
+            if workload == "A" {
+                // Model sharing through the existing foundation `&M` path: one
+                // model with two independent states versus two models.
+                let shared = workload_model(features);
+                let mut state_a = 0.0_f32;
+                let mut state_b = 0.0_f32;
+                let mut shared_index = 0_usize;
+                let shared_stats = common::measure("sharing-1model", steps, 1, || {
+                    let observation = &observations[shared_index % observations.len()];
+                    shared_index += 1;
+                    state_a = process_one(&shared, &state_a, black_box(observation)).unwrap();
+                    state_b = process_one(&shared, &state_b, black_box(observation)).unwrap();
+                });
+                let model_a = workload_model(features);
+                let model_b = workload_model(features);
+                let mut separate_a = 0.0_f32;
+                let mut separate_b = 0.0_f32;
+                let mut separate_index = 0_usize;
+                let separate_stats = common::measure("sharing-2models", steps, 1, || {
+                    let observation = &observations[separate_index % observations.len()];
+                    separate_index += 1;
+                    separate_a =
+                        process_one(&model_a, &separate_a, black_box(observation)).unwrap();
+                    separate_b =
+                        process_one(&model_b, &separate_b, black_box(observation)).unwrap();
+                });
+                println!(
+                    "    sharing delta={:.1} ns/obs -> {}",
+                    (shared_stats.median - separate_stats.median).abs(),
+                    common::materiality(
+                        shared_stats.median,
+                        shared_stats.iqr,
+                        separate_stats.median,
+                        separate_stats.iqr,
+                    )
+                );
+            }
+
+            if workload != "B" {
+                scaling.push((features as f64, stats.median));
+            }
+        }
+        if scaling.len() >= 2 {
+            println!(
+                "LR workload={workload} scaling exponent={:.3} (expected ~1.0)",
+                common::log_log_slope(&scaling)
+            );
+        }
     }
 }

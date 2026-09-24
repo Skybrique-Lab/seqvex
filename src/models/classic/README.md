@@ -60,6 +60,25 @@ must produce bitwise-identical results to repeated single-observation
 prediction. No micro-batch path may silently change the reduction order of the
 per-observation dot product.
 
+## Numerical envelope
+
+Prediction runs on the framework's `f32` substrate. Construction rejects
+non-finite weights and bias (`NonFiniteParameter`), and prediction rejects a
+dimension mismatch and non-finite features (`NonFiniteInput`). Prediction does
+**not** validate its output.
+
+Because the operands are `f32`, finite operands can still overflow during
+multiplication or summation and produce `±inf`; a subsequent `inf + (-inf)` can
+produce `NaN`. Finite parameters and finite inputs therefore do **not** guarantee
+a finite prediction. Callers are responsible for keeping the products and sums
+representable, for example by scaling features and coefficients. No numeric
+threshold is imposed or implied: this is expected IEEE-754 `f32` behaviour, not a
+defect, and Seqvex does not invent a magnitude cutoff.
+
+The analogous pure-prediction path `Rls::predict` computes `wᵀx` with the same
+no-output-validation behaviour; each model documents its own envelope rather than
+sharing a rule or abstraction.
+
 ## Measured evidence (#23)
 
 Release-mode benchmark (`cargo bench --bench linear_regression`), median of 20
