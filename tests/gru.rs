@@ -6,9 +6,10 @@
 //! call the library's kernels, so agreement is evidence the implementation is
 //! correct rather than evidence the two paths share a bug.
 
+use seqvex::execution::streaming::StreamingExecutor;
 use seqvex::foundation::numerical::{Matrix, Vector};
 use seqvex::foundation::observation::Observation;
-use seqvex::foundation::state::StateModel;
+use seqvex::foundation::state::{StateModel, process_batch, process_one, process_stream};
 use seqvex::models::recurrent::gru::{Gru, GruError, GruParameters};
 
 // --- independent scalar reference -------------------------------------------
@@ -88,6 +89,113 @@ fn ref_step(params: &RefParams, previous: &[f32], input: &[f32]) -> Vec<f32> {
         &ref_mul(&ref_map(&update_gate, |value| 1.0 - value), previous),
         &ref_mul(&update_gate, &candidate),
     )
+}
+
+/// A different exact identity for the logistic sigmoid:
+/// `0.5 * (1 + tanh(0.5 * x)) == 1 / (1 + exp(-x))`.
+fn ref_sigmoid_alt(value: f32) -> f32 {
+    0.5 * (1.0 + (0.5 * value).tanh())
+}
+
+/// The same four documented equations as `ref_step`, but with explicit scalar
+/// index loops and the alternative sigmoid identity above. The gate convention
+/// is unchanged; only the sigmoid formulation and the accumulation order differ,
+/// so agreement with production is within tolerance rather than bitwise.
+// The explicit scalar index loops are deliberate: they are the independent
+// formulation, not an iterator rewrite of the production path.
+#[allow(clippy::needless_range_loop)]
+fn ref_step_alt(params: &RefParams, previous: &[f32], input: &[f32]) -> Vec<f32> {
+    let hidden = previous.len();
+    let input_dim = input.len();
+
+    let mut update_gate = vec![0.0_f32; hidden];
+    for unit in 0..hidden {
+        let mut activation = params.b_z[unit];
+        for feature in 0..input_dim {
+            activation += params.w_z[unit][feature] * input[feature];
+        }
+        for state in 0..hidden {
+            activation += params.u_z[unit][state] * previous[state];
+        }
+        update_gate[unit] = ref_sigmoid_alt(activation);
+    }
+
+    let mut reset_gate = vec![0.0_f32; hidden];
+    for unit in 0..hidden {
+        let mut activation = params.b_r[unit];
+        for feature in 0..input_dim {
+            activation += params.w_r[unit][feature] * input[feature];
+        }
+        for state in 0..hidden {
+            activation += params.u_r[unit][state] * previous[state];
+        }
+        reset_gate[unit] = ref_sigmoid_alt(activation);
+    }
+
+    let mut candidate = vec![0.0_f32; hidden];
+    for unit in 0..hidden {
+        let mut activation = params.b_h[unit];
+        for feature in 0..input_dim {
+            activation += params.w_h[unit][feature] * input[feature];
+        }
+        for state in 0..hidden {
+            activation += params.u_h[unit][state] * reset_gate[state] * previous[state];
+        }
+        candidate[unit] = activation.tanh();
+    }
+
+    let mut next = vec![0.0_f32; hidden];
+    for unit in 0..hidden {
+        next[unit] =
+            (1.0 - update_gate[unit]) * previous[unit] + update_gate[unit] * candidate[unit];
+    }
+    next
+}
+
+/// Fixed-seed linear congruential generator, mirroring the style of
+/// `GruParameters::deterministic`; deterministic pseudorandom parameters and
+/// inputs only.
+struct Lcg {
+    state: u64,
+}
+
+impl Lcg {
+    fn new(seed: u64) -> Self {
+        Self { state: seed }
+    }
+
+    fn next_f32(&mut self) -> f32 {
+        self.state = self
+            .state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        ((self.state >> 40) as f32 / (1_u64 << 24) as f32) - 0.5
+    }
+}
+
+fn random_matrix(lcg: &mut Lcg, rows: usize, cols: usize) -> Vec<Vec<f32>> {
+    (0..rows)
+        .map(|_| (0..cols).map(|_| lcg.next_f32()).collect())
+        .collect()
+}
+
+fn random_vector(lcg: &mut Lcg, len: usize) -> Vec<f32> {
+    (0..len).map(|_| lcg.next_f32()).collect()
+}
+
+fn random_params(input_dim: usize, hidden_dim: usize, seed: u64) -> RefParams {
+    let mut lcg = Lcg::new(seed);
+    RefParams {
+        w_z: random_matrix(&mut lcg, hidden_dim, input_dim),
+        u_z: random_matrix(&mut lcg, hidden_dim, hidden_dim),
+        b_z: random_vector(&mut lcg, hidden_dim),
+        w_r: random_matrix(&mut lcg, hidden_dim, input_dim),
+        u_r: random_matrix(&mut lcg, hidden_dim, hidden_dim),
+        b_r: random_vector(&mut lcg, hidden_dim),
+        w_h: random_matrix(&mut lcg, hidden_dim, input_dim),
+        u_h: random_matrix(&mut lcg, hidden_dim, hidden_dim),
+        b_h: random_vector(&mut lcg, hidden_dim),
+    }
 }
 
 fn matrix(rows: &[Vec<f32>]) -> Matrix {
@@ -254,6 +362,77 @@ fn sequence_context_does_not_change_the_computation() {
         )
         .unwrap();
     assert_eq!(plain.hidden(), ordered.hidden());
+}
+
+// --- independent closed-form and alternative-formulation oracle ---------------
+
+#[test]
+fn exact_closed_form_decays_hidden_state_bitwise() {
+    // With W_h = U_h = b_h = 0 the candidate is tanh(0) = 0, and with
+    // W_z = U_z = b_z = 0 the update gate is sigmoid(0) = 0.5 exactly. Then
+    // h_t = 0.5 * h_{t-1}, and multiplication by 0.5 is exact in f32, so
+    // h_n = 0.5^n * h_0 bitwise. h_0 is supplied through StateModel::update,
+    // which takes an explicit previous state; the model is not mutated.
+    let input_dim = 2;
+    let hidden_dim = 2;
+    let zero_matrix = |rows: usize, cols: usize| vec![vec![0.0_f32; cols]; rows];
+    let params = RefParams {
+        w_z: zero_matrix(hidden_dim, input_dim),
+        u_z: zero_matrix(hidden_dim, hidden_dim),
+        b_z: vec![0.0; hidden_dim],
+        w_r: zero_matrix(hidden_dim, input_dim),
+        u_r: zero_matrix(hidden_dim, hidden_dim),
+        b_r: vec![0.0; hidden_dim],
+        w_h: zero_matrix(hidden_dim, input_dim),
+        u_h: zero_matrix(hidden_dim, hidden_dim),
+        b_h: vec![0.0; hidden_dim],
+    };
+    let gru = Gru::new(input_dim, hidden_dim, to_parameters(&params)).unwrap();
+    let observation = observation(&[0.0, 0.0]);
+
+    for steps in [1_usize, 3, 8] {
+        let mut hidden = Vector::from_slice(&[1.0, 2.0]);
+        for _ in 0..steps {
+            hidden = gru.update(&hidden, &observation).unwrap();
+        }
+        let mut expected = vec![1.0_f32, 2.0];
+        for _ in 0..steps {
+            for value in &mut expected {
+                *value *= 0.5;
+            }
+        }
+        assert_bitwise_eq(hidden.as_slice(), &expected);
+    }
+}
+
+#[test]
+fn alt_reference_matches_production_over_randomized_sequences() {
+    // Same documented equations, independent sigmoid identity
+    // (0.5*(1+tanh(0.5x))) and independent operation structure, so agreement is
+    // within 1e-5 absolute rather than bitwise.
+    let cases = [(1_usize, 1_usize), (2, 2), (3, 5), (5, 3)];
+    for (case, (input_dim, hidden_dim)) in cases.into_iter().enumerate() {
+        let params = random_params(input_dim, hidden_dim, 0xa11c_e000 + case as u64);
+        let mut gru = Gru::new(input_dim, hidden_dim, to_parameters(&params)).unwrap();
+        let mut lcg = Lcg::new(0xbeef_5eed + case as u64);
+        let mut hidden = vec![0.0_f32; hidden_dim];
+
+        for _ in 0..80 {
+            let input = random_vector(&mut lcg, input_dim);
+            let observation = observation(&input);
+            let expected = ref_step_alt(&params, &hidden, &input);
+
+            let committed = gru.hidden().clone();
+            let via_update = gru.update(&committed, &observation).unwrap();
+            assert_close(via_update.as_slice(), &expected, 1e-5);
+
+            gru.step(&observation).unwrap();
+            assert_close(gru.hidden().as_slice(), &expected, 1e-5);
+            assert_bitwise_eq(gru.hidden().as_slice(), via_update.as_slice());
+
+            hidden = expected;
+        }
+    }
 }
 
 // --- long sequences, reset ---------------------------------------------------
@@ -463,4 +642,289 @@ fn production_step_rejects_non_finite_candidate_and_preserves_state() {
         GruError::NonFiniteCandidate
     );
     assert_bitwise_eq(model.hidden().as_slice(), &[0.0]);
+}
+
+// --- sequential / causal / non-IID audit (#27) ------------------------------
+//
+// The GRU recurrence is order-dependent by construction. These checks close the
+// sequential-audit dimensions the cross-algorithm gate (#27) records as
+// remaining for GRU: prefix/causality, chunked continuation, permutation
+// expectation, controlled non-IID regimes, and long-run numerical behaviour.
+// All expectations come from the independent scalar `ref_step` oracle, never
+// from the production recurrence itself.
+
+fn states_differ(left: &[f32], right: &[f32]) -> bool {
+    left.iter()
+        .zip(right)
+        .any(|(a, b)| a.to_bits() != b.to_bits())
+}
+
+/// The GRU recurrence is a convex blend of the previous state and `tanh`
+/// (magnitude < 1), so from a zero start the hidden state stays within `[-1, 1]`
+/// up to `f32` rounding. Divergence smoke test only; not a statistical bound.
+fn assert_unit_bound(values: &[f32]) {
+    for &value in values {
+        assert!(
+            value.is_finite() && value.abs() <= 1.0 + 1e-6,
+            "hidden entry outside the unit bound: {value}"
+        );
+    }
+}
+
+fn scalar_fold(params: &RefParams, inputs: &[Vec<f32>]) -> Vec<f32> {
+    let mut hidden = vec![0.0_f32; params.b_z.len()];
+    for input in inputs {
+        hidden = ref_step(params, &hidden, input);
+    }
+    hidden
+}
+
+#[test]
+fn prefix_state_depends_only_on_observations_through_t() {
+    // State at time t must be identical whether or not later observations exist:
+    // the implementation consumes observations in order and cannot see the
+    // future. A prefix model stopped after 32 steps must match the full model at
+    // that point, and the independent scalar oracle on the same prefix.
+    let params = random_params(2, 3, 0xabc_1234);
+    let inputs: Vec<Vec<f32>> = (0..64)
+        .map(|step| vec![(step as f32 * 0.21).sin(), (step as f32 * 0.13).cos()])
+        .collect();
+
+    let full_model = Gru::new(2, 3, to_parameters(&params)).unwrap();
+    let prefix_model = Gru::new(2, 3, to_parameters(&params)).unwrap();
+
+    let mut full_state = Vector::zeros(3);
+    let mut prefix_state = Vector::zeros(3);
+    for (step, input) in inputs.iter().enumerate() {
+        let observation = observation(input);
+        full_state = process_one(&full_model, &full_state, &observation).unwrap();
+        if step < 32 {
+            prefix_state = process_one(&prefix_model, &prefix_state, &observation).unwrap();
+        }
+        if step == 31 {
+            assert_bitwise_eq(prefix_state.as_slice(), full_state.as_slice());
+        }
+    }
+
+    assert_close(
+        prefix_state.as_slice(),
+        &scalar_fold(&params, &inputs[..32]),
+        1e-5,
+    );
+    assert!(
+        states_differ(prefix_state.as_slice(), full_state.as_slice()),
+        "the full run must have advanced past the prefix"
+    );
+}
+
+#[test]
+fn chunked_execution_matches_continuous_stream() {
+    // Feeding the stream in chunks while preserving state across chunk
+    // boundaries must equal one continuous ordered fold, both through the
+    // foundation `process_batch` and through `StreamingExecutor::process_stream`.
+    let params = random_params(3, 4, 0xc0ff_ee01);
+    let gru = Gru::new(3, 4, to_parameters(&params)).unwrap();
+    let inputs: Vec<Vec<f32>> = (0..200)
+        .map(|step| {
+            vec![
+                (step as f32 * 0.17).sin(),
+                (step as f32 * 0.07).cos(),
+                ((step * step) as f32 * 0.001).sin(),
+            ]
+        })
+        .collect();
+    let observations: Vec<Observation<Vector>> =
+        inputs.iter().map(|input| observation(input)).collect();
+
+    let continuous = process_batch(&gru, Vector::zeros(4), observations.iter().cloned()).unwrap();
+
+    let mut chunked = Vector::zeros(4);
+    for chunk in observations.chunks(7) {
+        chunked = process_batch(&gru, chunked, chunk.iter().cloned()).unwrap();
+    }
+    assert_bitwise_eq(chunked.as_slice(), continuous.as_slice());
+
+    let mut executor_model = Gru::new(3, 4, to_parameters(&params)).unwrap();
+    let mut executor = StreamingExecutor::new(&mut executor_model, Vector::zeros(4));
+    let streamed = executor
+        .process_stream(observations.iter().cloned(), |_| {})
+        .clone();
+    assert_bitwise_eq(streamed.as_slice(), continuous.as_slice());
+
+    assert_close(continuous.as_slice(), &scalar_fold(&params, &inputs), 1e-5);
+}
+
+#[test]
+fn sequence_order_is_semantically_significant() {
+    // #27 requires the correct permutation property rather than a universal
+    // rule: a recurrent model is order-dependent, so reordering the same
+    // observations defines a different trajectory. Verify that expectation
+    // directly against the independent oracle.
+    let params = random_params(2, 2, 0x0dd_ba11);
+    let inputs: Vec<Vec<f32>> = (0..12)
+        .map(|step| vec![(step as f32 * 0.5).sin(), (step as f32 * 0.9).cos()])
+        .collect();
+    let forward = scalar_fold(&params, &inputs);
+    let mut reversed_inputs = inputs.clone();
+    reversed_inputs.reverse();
+    let reversed = scalar_fold(&params, &reversed_inputs);
+    assert!(
+        states_differ(&forward, &reversed),
+        "GRU recurrence must be order-sensitive"
+    );
+
+    let gru = Gru::new(2, 2, to_parameters(&params)).unwrap();
+    let mut state = Vector::zeros(2);
+    for input in &inputs {
+        state = gru.update(&state, &observation(input)).unwrap();
+        assert!(state.as_slice().iter().all(|value| value.is_finite()));
+    }
+    assert_close(state.as_slice(), &forward, 1e-5);
+}
+
+#[test]
+fn regime_shift_sequence_matches_independent_reference() {
+    // Piecewise-stationary inputs (one regime, then a different one) are a
+    // controlled non-IID sequence. The transition itself must remain causal and
+    // numerically bounded, and match the independent oracle throughout.
+    let params = random_params(3, 4, 0x5e90_0001);
+    let mut inputs = Vec::with_capacity(200);
+    for step in 0..200 {
+        if step < 100 {
+            inputs.push(vec![
+                0.4 + (step as f32 * 0.1).sin(),
+                -0.2,
+                0.1 * (step as f32 * 0.05).cos(),
+            ]);
+        } else {
+            inputs.push(vec![(step as f32 * 0.7).sin(), 0.6, -0.5]);
+        }
+    }
+
+    let gru = Gru::new(3, 4, to_parameters(&params)).unwrap();
+    let mut state = Vector::zeros(4);
+    let mut expected = vec![0.0_f32; 4];
+    for input in &inputs {
+        state = gru.update(&state, &observation(input)).unwrap();
+        expected = ref_step(&params, &expected, input);
+        assert!(state.as_slice().iter().all(|value| value.is_finite()));
+        assert_unit_bound(state.as_slice());
+    }
+    assert_close(state.as_slice(), &expected, 1e-5);
+}
+
+#[test]
+fn autocorrelated_sequence_matches_independent_reference() {
+    // Temporally dependent (AR(1)) inputs exercise the recurrence under
+    // autocorrelation rather than IID draws.
+    let params = random_params(2, 3, 0xa0c0_0001);
+    let mut lcg = Lcg::new(0x1234_5678);
+    let mut previous = vec![0.0_f32; 2];
+    let gru = Gru::new(2, 3, to_parameters(&params)).unwrap();
+    let mut state = Vector::zeros(3);
+    let mut expected = vec![0.0_f32; 3];
+    for _ in 0..400 {
+        let mut input = vec![0.0_f32; 2];
+        for (slot, previous_value) in input.iter_mut().zip(previous.iter()) {
+            *slot = 0.8 * *previous_value + 0.1 * lcg.next_f32();
+        }
+        previous.clone_from(&input);
+        state = gru.update(&state, &observation(&input)).unwrap();
+        expected = ref_step(&params, &expected, &input);
+        assert_unit_bound(state.as_slice());
+    }
+    assert_close(state.as_slice(), &expected, 1e-5);
+}
+
+#[test]
+fn repeated_observation_does_not_drift_from_reference() {
+    // A repeated identical observation is the degenerate low-diversity case; the
+    // state must still track the independent oracle over a long run.
+    let params = random_params(2, 2, 0xdead_1000);
+    let gru = Gru::new(2, 2, to_parameters(&params)).unwrap();
+    let input = vec![0.37_f32, -0.62];
+    let observation = observation(&input);
+    let mut state = Vector::zeros(2);
+    let mut expected = vec![0.0_f32; 2];
+    for step in 0..2_000 {
+        state = gru.update(&state, &observation).unwrap();
+        expected = ref_step(&params, &expected, &input);
+        assert!(state.as_slice().iter().all(|value| value.is_finite()));
+        assert_unit_bound(state.as_slice());
+        if step % 250 == 0 || step == 1_999 {
+            assert_close(state.as_slice(), &expected, 1e-5);
+        }
+    }
+    assert_close(state.as_slice(), &expected, 1e-5);
+}
+
+#[test]
+fn long_run_matches_reference_and_stays_bounded() {
+    // Long-horizon numerical audit: 10_000 deterministic observations, with the
+    // reference and production paths bitwise identical at every step and both
+    // tracking the independent scalar oracle. The hidden state is a convex blend
+    // of the previous state and `tanh` (magnitude < 1), so from a zero start
+    // |h| <= 1 is a mathematical invariant, not a fitted tolerance; it is
+    // checked as a divergence smoke test.
+    let params = random_params(3, 5, 0x106e_0001);
+    let mut reference = Gru::new(3, 5, to_parameters(&params)).unwrap();
+    let mut production = Gru::new(3, 5, to_parameters(&params)).unwrap();
+    let mut scalar = vec![0.0_f32; 5];
+    let mut lcg = Lcg::new(0xfeed_0001);
+    let mut max_abs = 0.0_f32;
+
+    for _ in 0..10_000 {
+        let input = vec![lcg.next_f32(), lcg.next_f32(), lcg.next_f32()];
+        let observation = observation(&input);
+        reference.step(&observation).unwrap();
+        production.step_in_place(&observation).unwrap();
+        scalar = ref_step(&params, &scalar, &input);
+
+        assert_bitwise_eq(
+            production.hidden().as_slice(),
+            reference.hidden().as_slice(),
+        );
+        assert!(
+            reference
+                .hidden()
+                .as_slice()
+                .iter()
+                .all(|value| value.is_finite())
+        );
+        max_abs = max_abs.max(
+            reference
+                .hidden()
+                .as_slice()
+                .iter()
+                .fold(0.0_f32, |max, value| max.max(value.abs())),
+        );
+    }
+
+    assert_close(reference.hidden().as_slice(), &scalar, 1e-4);
+    assert!(
+        max_abs <= 1.0 + 1e-6,
+        "hidden state exceeded the unit bound: {max_abs}"
+    );
+}
+
+#[test]
+fn stream_failure_preserves_state_and_continues_from_last_valid() {
+    // A failed update must not advance the committed state; the stream continues
+    // from the last valid state, so skipping the bad observation is equivalent to
+    // never having supplied it.
+    let params = random_params(2, 2, 0xfa11_0001);
+    let gru = Gru::new(2, 2, to_parameters(&params)).unwrap();
+    let good = observation(&[0.3, -0.4]);
+    let observations = [good.clone(), observation(&[f32::NAN, 0.1]), good.clone()];
+    let mut failures = 0_usize;
+    let final_state = process_stream(&gru, Vector::zeros(2), observations.iter().cloned(), |_| {
+        failures += 1
+    })
+    .clone();
+
+    assert_eq!(failures, 1);
+    let mut expected = vec![0.0_f32; 2];
+    expected = ref_step(&params, &expected, &[0.3, -0.4]);
+    expected = ref_step(&params, &expected, &[0.3, -0.4]);
+    assert_close(final_state.as_slice(), &expected, 1e-5);
 }
