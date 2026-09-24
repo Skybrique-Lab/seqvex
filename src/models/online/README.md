@@ -71,6 +71,333 @@ The incoming `P` is expected symmetric PSD; the reference does not run a general
 positive-definiteness check (it would add a primitive and a hidden `O(D³)` cost).
 The denominator guard catches corrupted/indefinite `P` and overflow.
 
+## Applicability and statistical contract
+
+> Recorded by the R5 checkpoint from the completed D1–D4/R1–R4 evidence. This
+> section states what RLS **assumes**, what the implementation **guarantees**,
+> and what remains the caller's responsibility. It adds no API and changes no
+> behaviour. Every quantitative statement is bounded by the
+> [operating envelope](#operating-envelope); none is a universal guarantee.
+
+RLS is an estimator defined by an optimisation objective, not a probabilistic
+model. The contract keeps the identity that *defines* the algorithm separate
+from the conditions under which its coefficients are *meaningful*. The general
+failure semantics remain those of `docs/FAILURE_AND_RECOVERY.md`; this section
+specialises them for RLS.
+
+### Mathematical assumptions
+
+The estimator is defined by the weighted least-squares objective
+
+```text
+J_t(w) = Σ_{j≤t} λ^{t−j} (y_j − wᵀ x_j)² + (λ^t / δ) ‖w‖²
+```
+
+whose minimiser solves `A_t w = b_t`, with
+
+```text
+A_t = Σ_{j≤t} λ^{t−j} x_j x_jᵀ + (λ^t / δ) I
+b_t = Σ_{j≤t} λ^{t−j} y_j x_j .
+```
+
+`P_t` is the inverse-correlation matrix maintained by the recurrence: the
+`A_t^{-1}`-equivalent whose residual `‖A_t P_t − I‖∞` is what the tests bound.
+`w_t` is the **exact** minimiser of `J_t`. This identity holds by construction
+and requires no probabilistic assumption; the literal objective, solved
+independently in `f64`, is the mathematical oracle, and the recurrence is never
+used as its own oracle.
+
+Enforced requirements: `D ≥ 1`; `0 < λ ≤ 1` finite; `δ > 0` finite; `x_t` and
+`y_t` finite; consistent dimensions across `x`, `w`, and `P`.
+
+### Statistical assumptions
+
+These are assumptions about the **data-generating process**. They are required
+to interpret `w_t` statistically, are **not** enforced or validated at runtime,
+and must not be turned into API checks.
+
+- **Exogeneity / conditional zero mean.** `E[y_t − x_tᵀ w* | x_t] = 0` (no
+  omitted-variable bias, no feedback from `y` into `x`).
+- **Persistent / sufficient excitation.** The directions whose coefficients are
+  to be estimated are exercised often enough to dominate the prior and noise
+  (see [Persistent excitation and identifiability](#persistent-excitation-and-identifiability)).
+- **Identifiability.** No perfect collinearity; every estimated direction is
+  supported by the data.
+- **Stationary target for `λ = 1`.** If a single fixed `w*` is to be interpreted,
+  the target must not change; otherwise the pooled objective is the wrong target.
+- **Slowly varying target for `λ < 1`.** The drift rate must be compatible with
+  the effective memory `≈ 1/(1−λ)`.
+- **Bounded second moments** of the features and targets, where variance
+  statements are made.
+- **Noise independence** is *not* required for the numerical envelope (the
+  covariance, denominator, and guards are noise-independent), but is required
+  for the bias/variance interpretation above.
+
+### Persistent excitation and identifiability
+
+Three distinct notions must not be conflated:
+
+1. **Mathematical identifiability.** A direction `u` is identifiable only if it
+   is supported by the (windowed, `λ`-weighted) data Gram
+   `G_t = Σ_{j≤t} λ^{t−j} x_j x_jᵀ`; if `uᵀ G_t u = 0`, the data contains no
+   information about that direction.
+2. **Finite-sample identifiability.** A weakly excited direction has small but
+   non-zero `uᵀ G_t u`; the coefficient is determined but with high variance and
+   slow convergence.
+3. **Numerical conditioning.** A large condition number `κ(A_t)` means the
+   *computation* is sensitive to rounding; it is not the same statement as
+   statistical identifiability.
+
+Consequences, stated without creating any threshold:
+
+- An **exactly unexcited** direction cannot be reliably identified from data. Its
+  weight is frozen (`P[·,e] == 0` gives zero gain), so `w_e` does not move; under
+  `λ = 1` its `P_ee` stays at the ridge `δ`, and under `λ < 1` its `P_ee` inflates
+  by `1/λ` per step and can eventually overflow. This is a data/regime property,
+  not a defect, and the implementation supplies no excitation diagnostic.
+- `λ = 1` keeps `A_t` formally invertible forever through `(λ^t/δ)I`, but a
+  direction the data never excites is determined by the **ridge**, not by
+  information — formal invertibility is not statistical identifiability.
+- Large `κ` increases numerical sensitivity; conditioning is **not** dimension
+  and **not** finite-sample identifiability.
+
+Seqvex currently exposes **no** public condition-number or excitation
+diagnostic, and R5 deliberately creates none (`condition_number()`,
+`excitation_score()`, automatic warnings, normalisation, or automatic feature
+scaling would all be new public surfaces requiring a future architecture
+decision). Persistent excitation remains a user/data responsibility.
+
+### Forgetting factor `λ` semantics
+
+`λ=1`:
+
+- the estimator is **pooled/ridge least squares** over all observations;
+- its final objective is **permutation invariant** — the fitted `w_N` does not
+  depend on observation order (the sequential trajectory still does);
+- evaluating it sequentially remains meaningful, but interpreting a fixed `w*`
+  requires a sufficiently stable target.
+
+`0 < λ < 1`:
+
+- the estimator is **exponentially recency-weighted**: observation `j` carries
+  weight `λ^{t−j}` at time `t`;
+- it is **order-sensitive** — order is semantically real;
+- the effective memory and sample size scale as `≈ 1/(1−λ)`;
+- it adapts to changing regimes at a rate governed by `λ`;
+- excessive forgetting with missing excitation **amplifies covariance** in
+  unexcited directions `≈ 1/λ` per step.
+
+`λ` does **not** guarantee: consistency (for `λ<1` the objective never stops
+changing), optimality, uncertainty quantification, an "optimal" value,
+stationarity of the target, or that any particular `λ` is appropriate. RLS
+exposes no auto-tuning and R5 recommends none.
+
+### Initial covariance `δ` semantics
+
+- `δ` sets the initial covariance `P_0 = δ I` and, equivalently, the ridge/prior
+  weight `λ^t/δ` on `‖w‖²` in `J_t`.
+- Larger `δ` ⇒ weaker prior ⇒ the first observations dominate sooner; smaller
+  `δ` ⇒ stronger shrinkage of `w` toward `0`.
+- `δ` interacts with feature scale. For a **uniform** feature rescaling
+  `x → s·x`, the objective similarity is preserved by the matched prior
+  `δ_s = δ / s²` (then `w(x̃; δ_s) = w(x; δ)/s` and predictions are invariant).
+  This is a mathematical relation used to make scaling experiments exact; it is
+  **not** an API transformation and the implementation applies no scaling.
+- No specific `δ` is universally appropriate, and the implementation cannot infer
+  or auto-select one. Choosing `δ` is a user hyperparameter decision.
+
+### Numerical contract
+
+A numerical guard is **not** a statistical guarantee.
+
+- `RlsError::InvalidDenominator` (the denominator `d = λ + xᵀPx` is not finite
+  and positive) is a **numerical guard**.
+- `RlsError::NonFiniteCandidate` (the candidate `(w',P')` is not finite) is a
+  **numerical guard**.
+- A rejected update **preserves the previously committed state bitwise**.
+- A guard **does not** prove the statistical model is invalid; it reports that
+  the computed state lost positivity/finiteness.
+- Absence of a guard **does not** prove numerical accuracy.
+- A **statistical** failure (poor excitation, wrong model, drift too fast) is
+  **not** automatically an implementation defect; it is a data/regime condition.
+
+`P` is expected symmetric PSD on entry; symmetry is preserved exactly by the
+update, and finiteness is checked on the candidate. The tested `f32` envelope is
+summarised in [Operating envelope](#operating-envelope) and is deliberately not
+converted into API limits.
+
+### Sequential evaluation contract
+
+RLS updates are ordered and state-dependent, so evaluation must be causal. The
+required protocol for any honest sequential evaluation is:
+
+1. compute `ŷ_t = w_{t−1}ᵀ x_t` from the **committed** state **before** consuming
+   `y_t`;
+2. form the prediction error `e_t = y_t − ŷ_t`;
+3. update and commit `(w_t, P_t)` from `(x_t, y_t)`;
+4. continue strictly in temporal order.
+
+Conceptually **prohibited**: shuffling, sorting, resampling, using future
+observations, building labels from future observations, and scoring an
+observation after fitting it on itself. `λ=1` is order-invariant only for the
+final pooled fit; the *trajectory* and the prequential error remain temporal.
+
+Additional semantics:
+
+- **Warm-up.** Early estimates reflect the prior `P_0 = δI`; they should be
+  discarded or flagged until the data dominates.
+- **Reset.** `reset` starts a new sequence (`w = 0`, `P = δI`) and discards
+  history; it is the explicit recovery from a diverged or overflowed state.
+- **Continued learning.** Preserving `(w, P)` across a boundary continues the
+  same estimator; this is the difference from reset.
+- **Regime changes.** Evaluate pre-shift steady state, peak transient,
+  convergence, and post-shift steady state separately, plus the prequential
+  series; do not build regime labels from future data.
+- **Delayed labels.** If `y_t` arrives late, the prediction at `t` may use only
+  information available at `t`; the update, once `y_t` arrives, must preserve the
+  original observation order. Buffering and matching labels to observations is a
+  caller responsibility.
+
+This is a semantics description only. No evaluation framework is added.
+
+### Failure taxonomy
+
+The ten categories below distinguish expected data/regime conditions, numerical
+guards, and hard errors. Categories that have no `RlsError` representation are
+**observational/statistical** and must not be promoted to new error variants.
+
+| # | Category | Signal | Class | Intended action |
+|---|---|---|---|---|
+| 1 | Insufficient excitation | large `P`, slow/biased `w`, large prequential error | Expected data/regime | Monitor; adjust `λ`/design |
+| 2 | Rank deficiency (exactly unexcited direction) | weight frozen; `λ<1` `P_ee` inflates | Expected data | Data responsibility; `λ<1` may eventually guard |
+| 3 | Severe conditioning | large `κ(A_t)`; rising residual before prediction fails | Numerical (observation) | Rescale features; no auto-normalisation |
+| 4 | Dynamic-range limitation | `λ=1`, large `N`, `P→0`; gradual error growth | Numerical (observation) | Bound horizon or use `λ<1` |
+| 5 | Numerical cancellation | `P` loses relative accuracy at high disparity | Numerical (observation) | Feature-scale policy |
+| 6 | Denominator failure | `RlsError::InvalidDenominator` | Numerical guard | Reject + preserve; investigate — not automatically a bug |
+| 7 | Non-finite candidate / overflow | `RlsError::NonFiniteCandidate` | Numerical guard | Reject + preserve; reset if persistent |
+| 8 | Invalid input | `RlsError::NonFiniteInput`, `RlsError::DimensionMismatch` (features) | Hard caller/API error | Reject input; caller fixes |
+| 9 | Invalid parameter/state | `RlsError::ZeroDimension`, `InvalidForgettingFactor`, `InvalidInitialCovariance`, `DimensionMismatch` (state) | Hard config/API error | Reject; caller fixes |
+| 10 | Genuine implementation defect | symmetry residual `≠ 0`; non-finite **committed** state; broken atomicity; wrong trajectory on validated input | Implementation defect | Escalate; code change required |
+
+`RlsError::DimensionMismatch` serves both input (#8) and state (#9); the
+validation order decides the context. A genuine defect (#10) is tied only to
+actual invariant violations, never to a statistical miss or a guard.
+
+### Guarantee boundary
+
+| Property | Type | Evidence | Guarantee? |
+|---|---|---|---|
+| `w_t` minimises `J_t` (up to `f32` error) | Mathematical | D1–D4 literal oracle | Yes (definition) |
+| Atomic coupled `(w,P)` commit | Implementation | D1/D4 atomicity tests | Yes |
+| Failed update preserves committed state bitwise | Implementation | D1/D4 | Yes |
+| Ordered sequential/chunk semantics | Implementation | D4 | Yes |
+| `λ=1` final-fit permutation invariance | Mathematical | D4 | Yes |
+| `P` symmetry exactly `0.0` residual | Numerical | R1–R4 | Yes |
+| Finite committed state or rejection | Numerical | R1–R4 | Yes |
+| Numerical accuracy inside tested envelope | Numerical | R1–R4 | Within envelope only |
+| Uniform scaling similarity with `δ_s = δ/s²` | Mathematical/Numerical | R3/R4 | Within tested envelope |
+| Convergence under assumptions | Statistical | R2 | Only under [statistical assumptions](#statistical-assumptions) |
+| Unbiasedness under exogeneity | Statistical | `DERIVED` | Conditional only |
+| Variance decreasing with memory | Statistical | R2 direction | Directional only |
+| Persistent excitation / identifiability | Statistical | R1/R2 | **Not guaranteed** — user/data |
+
+### Operating envelope
+
+Expressed in four categories; none is a universal statement.
+
+**Demonstrated envelope** (passed the registered tolerances in the cited stage):
+
+- D1–D4: `D ∈ {1,2,4}`, `N ≤ 100`, `λ ∈ {1,0.9,0.99}`, `δ ∈ {1,1e3}`.
+- R1: `D ≤ 4`, fully excited, partial, weak, and correlated designs;
+  `δ ∈ {1,1e3,1e6}`; runs to `N ≈ 10⁴`.
+- R2: `D ∈ {2,4}`, `N ≈ 1400`, bounded noise `σ ≤ 0.2`, `λ ∈ {1,0.9,0.95,0.99}`.
+- R3: `D ∈ {2,4}`, `N ≤ 1000`; uniform matched scaling to `s = 1e5`; disparity
+  `≤ 10`; `ρ ≤ 0.99`.
+- R4 committed: `D ≤ 16`, `N ≤ 1000` (Track A `N = 64·D`), realised `κ ≤ 1e3`,
+  `λ ∈ {1,0.99,0.9}`, disparity `≤ 10`, dense/correlated designs.
+- R4 release-only diagnostics: `D ≤ 64`, `N = 10⁴`, `λ = 0.999/0.9999`,
+  `s = 1000` at `D = 16`.
+
+**Known boundary / failure behaviour** (recorded, outside the well-conditioned
+fully excited envelope):
+
+- Feature-scale disparity around ratio `100` in tested `λ=1`, small-`D`
+  configurations: the covariance residual exceeds the registered tolerance while
+  predictions remain small, with **no guard**; ratio `1000` produced
+  `InvalidDenominator` guards.
+- Exactly unexcited direction under `λ < 1`: `P_ee` inflates `≈ 1/λ` per step and
+  eventually overflows to `NonFiniteCandidate` at the step predicted from
+  `δ` and `λ`.
+- `λ = 1` over long `N`: `P → 0` and parameter error grows gradually (dynamic
+  range), distinct from `λ < 1`, which plateaus after `≈ 1/(1−λ)`.
+- Weak excitation: the peak `P` grows as the weak-axis scale falls
+  (finite-horizon evidence only).
+
+**Unresolved regions** (do not infer from the above):
+
+- decision-grade performance behaviour of the persistent-excitation streaming
+  workload;
+- real non-stationary data, drift models, and delayed labels;
+- longer horizons and larger `D` than the released diagnostics;
+- the exact disparity boundary as a function of `D` at matched conditioning
+  (the R4 Track-A κ-dial limitation);
+- any representation decision.
+
+**Theoretical/derived expectations** (not measured guarantees):
+
+- `κ(A) ≈ (s_max/s_min)²` for scale disparity; direct-solve forward error
+  `≈ κ·eps` (RLS is a recursion, not a direct solve);
+- `λ<1` data weight saturates (`Σλ^j → 1/(1−λ)`), so error should plateau;
+- `λ=1` is the pooled objective and permutation-invariant;
+- `P`, the denominator, and the guard behaviour are **noise-independent**;
+- `v_i v_j == v_j v_i` in IEEE `f32`, hence exact symmetry.
+
+### `f32` versus `f64`
+
+The production representation is `f32`, and R1–R4 did **not** justify changing
+it. `f64` is used only as a test-local/reference diagnostic (literal objective,
+direct solve, Jacobi spectrum). `f32` is adequate wherever the mathematical and
+statistical conditions hold inside the demonstrated envelope; numerical risk
+rises with conditioning, feature-scale disparity, and dynamic range
+(`λ=1`, `P→0`). A production precision change would require a reproducible
+failure **inside** the pass region attributable to `f32` precision rather than
+data/design, plus a future CRITICAL ARCHITECTURE REVIEW. No `f64` mode,
+configurable precision, normalisation, or preconditioning is added. See
+[Major deferred decisions](#major-deferred-decisions).
+
+### User and data responsibilities
+
+Seqvex RLS cannot guarantee and the caller/data pipeline must supply:
+
+- persistent excitation of the directions to be estimated;
+- exogeneity (or an explicit, acknowledged bias);
+- stationarity for `λ=1` and a drift rate compatible with `λ<1`;
+- a feature-scale policy, including any normalisation;
+- a suitable `λ` and `δ`, including the bias/variance trade-off;
+- temporal integrity (ordering, causal labels, no leakage);
+- handling of invalid or missing observations, and any retry/reset policy;
+- uncertainty quantification — RLS exposes none;
+- noise/variance expectations — only monotone directions are established.
+
+### Production readiness and the optimization gate
+
+This contract does **not** declare RLS production-ready. Remaining gates:
+
+- decision-grade performance profiling of a persistent-excitation streaming
+  workload, tied to a defined workload/service level;
+- architecture review of `StreamingExecutor<'m, &mut M>` multi-stream sharing;
+- architecture review of where an optimised `P` buffer would live;
+- any future numerical-representation decision;
+- final production API review;
+- measured optimization only after the above.
+
+**OPTIMIZATION REMAINS CLOSED.** `O(D²)` complexity, the existing allocations,
+the existing benchmark, known `f32` boundaries, or a theoretical SIMD benefit are
+**not** sufficient reasons to optimize. Optimization requires, in order:
+(1) the correctness gate, (2) the statistical-applicability gate, (3) the
+architecture checkpoint, (4) decision-grade profiling, (5) an identified
+bottleneck, and (6) a measured benefit. No exception.
+
 ## Micro-batch
 
 RLS updates are ordered and state-dependent, so a bounded micro-batch must be an
@@ -81,11 +408,19 @@ micro-batch API or executor is added for this slice.
 
 ## Measured evidence (#26)
 
-`cargo bench --bench rls`, release, median of 20 runs. `λ = 1` is used for the
-benchmark because it replays one fixed observation: a fixed input with `λ < 1`
-is not persistently exciting, so `P` inflates in unexplored directions and
-eventually trips the denominator guard. The update path and its `O(D²)` work are
-unchanged; the correctness tests cover `λ < 1` over varying inputs.
+`cargo bench --bench rls`, release, median of 20 runs. The benchmark uses `λ = 1`
+because it replays a single fixed observation vector.
+
+With `λ < 1`, older observations receive geometrically less weight (`λ^{t−i}`),
+and the covariance can grow in directions the input never excites: the
+information matrix `A_t = λ A_{t−1} + x_t x_tᵀ` decays by `λ` per step in any
+unexcited direction, so `P_t = A_t^{−1}` grows without bound there. A repeated or
+low-excitation input therefore produces covariance inflation. In finite precision
+this ill-conditioning eventually yields non-finite values (overflow), at which
+point the implementation's denominator/candidate finiteness guards reject the
+update. Those guards are implementation-level numerical protections, not a
+statement that `λ < 1` is invalid. The update path and its `O(D²)` work are
+unchanged; the correctness tests cover `λ < 1` over varying, exciting inputs.
 
 | features | path | ns/obs | allocs/obs | bytes/obs |
 |---:|---|---:|---:|---:|
