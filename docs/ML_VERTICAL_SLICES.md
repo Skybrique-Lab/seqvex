@@ -60,7 +60,7 @@ this matrix does not create or close Issues.
 |---|---|---|---|---|---|---|
 | **Linear Regression** | #23 | Closed-form prediction `ŷ = w · x + b`; prediction only | None during prediction (immutable weights) | None | Streaming per-observation; independent observations may micro-batch | Implemented (reference/streaming/micro-batch) |
 | **Decision Tree** | #24 | Read-only traversal from a trained tree | None (immutable at inference) | None, or a small traversal path | Streaming per-observation traversal; independent observations may micro-batch | Implemented (reference/streaming/micro-batch; regression only, classification deferred) |
-| **K-Nearest Neighbors** | #25 | Brute-force distance + neighbor selection | Stored reference observations + `k` | Per-query distance scratch `O(N)`; neighbor set `O(k)` | Streaming per-query; independent queries may micro-batch | Planned |
+| **K-Nearest Neighbors** | #25 | Brute-force distance + neighbor selection | Stored reference observations + `k` | Per-query distance scratch `O(N)`; neighbor set `O(k)` | Streaming per-query; independent queries may micro-batch | Implemented (reference/streaming/micro-batch; regression only, classification deferred) |
 | **GRU bounded micro-batch** | #22 | Bounded, ordered micro-batch over existing GRU semantics | Hidden state `h` per stream | Reference path only; do not touch the model-owned workspace | Ordered fold; **not** independent; unchanged failure semantics | Planned (reference path only) |
 | **Recursive Least Squares** | #26 | Ordered online adaptation of `(w, P)` | Adaptive `w` and covariance `P` per stream | `d`-vectors and `d×d` rank-1 update scratch | Ordered, state-dependent; **not** independent | Implemented (reference/streaming/bounded fold) |
 
@@ -121,6 +121,11 @@ RLS is the first **stateful** slice to confirm the hypothesis rather than
 contradict it: its adaptive `(w, P)` is per-stream execution state, the model
 stays immutable and shareable, and no model-owned scratch is needed.
 
+KNN adds the observation-backed case: its reference set is immutable, shareable
+model data, and its distance/selection scratch stays local and transient, so it
+also confirms the hypothesis rather than extending the GRU's model-owned
+workspace arrangement.
+
 ## Critical architecture review requirement
 
 Any work in a slice that could materially constrain, complicate, or prematurely
@@ -166,6 +171,30 @@ returned. Construction builds one growing node `Vec` (11, 14, and 16 heap
 allocations at the measured tree sizes), distinct from the allocation-free
 per-observation inference and the per-batch output allocation. No optimization
 was implemented; there is no profile-identified bottleneck.
+
+### K-Nearest Neighbors (#25)
+
+Read-only regression inference over stored references; classification and
+training remain out of scope. Unlike LR/DT prediction, the current **full-sort reference implementation** is
+not allocation-free: each query materialises all `N` candidates in one
+transient `O(N)` buffer (16 bytes per reference, so `bytes/query = 16·N`), the
+scratch this slice's profile anticipates; a distance-scan-only control allocates
+nothing. Streaming matches the direct reference (same `predict`). The scan
+control localises the baseline cost: at `N = 262144, d = 8` the full-sort
+selection dominates (9.80 ms/query vs a 1.48 ms scan), while at
+`N = 8192, d = 256` distance computation dominates (1.14 ms vs 0.97 ms).
+Latency is flat across `k ∈ {1, 8, 32, N}` at `N = 8192, d = 32` (~230 µs)
+because selection is the sort, not `k`. Construction is `N + 1` allocations.
+The bounded micro-batch preserves input order but is not allocation-free either:
+it adds one output `Vec` that grows through reallocations, so the measured
+allocator calls per observation are B-dependent — 2.000, 1.250, 1.125, and 1.047
+for `B = 1, 8, 32, 128` (one output allocation at `B = 1`, with +1, +2, +4, +6
+further output reallocations at `B = 8, 32, 128`); it is not faster than
+single-query prediction (33.7 µs vs 49.4 µs at `B = 128`). This allocation
+behaviour is a property of the current reference implementation, not an intrinsic
+requirement of all KNN implementations. No optimization was implemented;
+full-sort selection is the obvious future target but requires the existing
+correctness evidence to remain and a measured decision, per the slice lifecycle.
 
 ### Recursive Least Squares (#26)
 

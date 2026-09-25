@@ -31,3 +31,7 @@ harness = false
 [[bench]]
 name = "decision_tree"
 harness = false
+
+[[bench]]
+name = "knn"
+harness = false
