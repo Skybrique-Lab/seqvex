@@ -360,7 +360,9 @@ use the measurement stages when relevant.
   execution model, scope, hardware direction, current decisions, and
   deferred design questions.
 - [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) — development principles for
-  humans and AI-assisted work.
+  humans and AI-assisted work (the canonical development contract).
+- [`FEATURE_DEVELOPMENT.md`](FEATURE_DEVELOPMENT.md) — the operational
+  runbook for taking a feature, algorithm, or function from issue to merge.
 - [`ROADMAP.md`](docs/ROADMAP.md) — current development direction and phase
   planning; intentionally non-contractual.
 - [`FAILURE_AND_RECOVERY.md`](docs/FAILURE_AND_RECOVERY.md) — failure
@@ -432,9 +434,10 @@ Before making a substantial change, read:
 
 1. [`ARCHITECTURE.md`](ARCHITECTURE.md)
 2. [`DEVELOPMENT.md`](docs/DEVELOPMENT.md)
-3. [`FAILURE_AND_RECOVERY.md`](docs/FAILURE_AND_RECOVERY.md)
-4. [`ROADMAP.md`](docs/ROADMAP.md), where the change affects current phase work
-5. [`CONTRIBUTING.md`](CONTRIBUTING.md)
+3. [`FEATURE_DEVELOPMENT.md`](FEATURE_DEVELOPMENT.md)
+4. [`FAILURE_AND_RECOVERY.md`](docs/FAILURE_AND_RECOVERY.md)
+5. [`ROADMAP.md`](docs/ROADMAP.md), where the change affects current phase work
+6. [`CONTRIBUTING.md`](CONTRIBUTING.md)
 
 Architecture changes should be supported by a concrete problem, evidence,
 and an understanding of reversal cost.

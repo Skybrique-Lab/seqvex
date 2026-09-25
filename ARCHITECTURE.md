@@ -872,9 +872,10 @@ It is not measured by number of crates, algorithms, abstractions, generated code
 | `README.md` | Project identity, vision, scope, and public orientation |
 | `ARCHITECTURE.md` | Architectural reasoning, system structure, and design decisions |
 | `docs/DEVELOPMENT.md` | Development rules for humans and AI |
+| `FEATURE_DEVELOPMENT.md` | Operational feature-development runbook (lifecycle, decomposition, traceability, templates) |
 | `docs/ROADMAP.md` | Current development direction and phase planning |
 | `docs/FAILURE_AND_RECOVERY.md` | Failure paths, state integrity, and recovery principles |
-| `CONTRIBUTING.md` | Contributor participation and contribution process |
+| `CONTRIBUTING.md` | Contributor participation, classification taxonomy, and contribution process |
 
 If another document conflicts with this architecture, determine whether the conflict is an outdated document, a deliberate architectural change, or a missing clarification. Do not silently choose one interpretation.
 

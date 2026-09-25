@@ -705,6 +705,8 @@ Experiments should be:
 
 # 24. Issue and Planning Discipline
 
+The step-by-step operational procedure that implements this discipline — issue decomposition, branch/commit/PR lifecycle, traceability, validation, and templates — is in [`FEATURE_DEVELOPMENT.md`](../FEATURE_DEVELOPMENT.md). This section remains authoritative for the rules; the runbook does not replace them.
+
 GitHub issues are part of the project's architectural paper trail.
 
 Before creating, reopening, updating, or closing an issue:
@@ -1253,7 +1255,8 @@ It is not measured by:
 | `DEVELOPMENT.md` | Development rules for humans and development agents |
 | `ROADMAP.md` | Current development direction and phase planning |
 | `FAILURE_AND_RECOVERY.md` | Failure paths, state integrity, and recovery principles |
-| `CONTRIBUTING.md` | Contributor participation and contribution process |
+| `CONTRIBUTING.md` | Contributor participation, classification taxonomy, and contribution process |
+| `FEATURE_DEVELOPMENT.md` | Operational feature-development runbook (lifecycle, decomposition, traceability, templates) that implements this contract |
 | AI-assisted development guidance | Tool-neutral guidance for development agents and AI-assisted repository work |
 
 If another document conflicts with this development contract, determine whether the conflict is an outdated document, a deliberate architectural change, or a missing clarification.
@@ -1350,3 +1353,5 @@ OPEN QUESTION
 ```
 
 Do not present an inference as a measurement, an assumption as a fact, or a provisional decision as a settled architectural decision.
+
+The repository-evidence boundary — verifying what actually exists before planning or implementing, and distinguishing `FACT` / `APPROVED DESIGN` / `PLANNED` / `HISTORICAL` / `INFERENCE` / `UNKNOWN` — is operationalized in [`FEATURE_DEVELOPMENT.md`](../FEATURE_DEVELOPMENT.md) §8.
